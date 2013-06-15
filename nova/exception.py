@@ -1494,3 +1494,8 @@ class KeyManagerError(NovaException):
 
 class InvalidVideoMode(Invalid):
     msg_fmt = _("Provided video model (%(model)s) is not supported.")
+
+
+class NoImageHandlerAvailable(NovaException):
+    msg_fmt = _("No image handlers specified in the configuration "
+                "are available for image %(image_id)s.")
