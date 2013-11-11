@@ -23,6 +23,7 @@ Test suite for VMwareAPI.
 
 import contextlib
 import copy
+import datetime
 
 import mock
 import mox
@@ -38,6 +39,7 @@ from nova import db
 from nova import exception
 from nova.openstack.common import jsonutils
 from nova.openstack.common import lockutils
+from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import test
 import nova.tests.image.fake
@@ -53,6 +55,7 @@ from nova.virt.vmwareapi import driver
 from nova.virt.vmwareapi import ds_util
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import fake as vmwareapi_fake
+from nova.virt.vmwareapi import imagecache
 from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmops
@@ -61,6 +64,11 @@ from nova.virt.vmwareapi import volume_util
 from nova.virt.vmwareapi import volumeops
 
 FAKE_IMAGE_UUID = '70a599e0-31e7-49b7-b260-868f441e862b'
+
+CONF = cfg.CONF
+CONF.import_opt('host', 'nova.netconf')
+CONF.import_opt('remove_unused_original_minimum_age_seconds',
+                'nova.virt.imagecache')
 
 
 class fake_vm_ref(object):
@@ -360,7 +368,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         # Get record for VM
         vms = vmwareapi_fake._get_objects("VirtualMachine")
-        vm = vms.objects[0]
+        for vm in vms.objects:
+            if vm.get('name') == self.uuid:
+                break
 
         # Check that m1.large above turned into the right thing.
         mem_kib = long(self.type_data['memory_mb']) << 10
@@ -421,6 +431,14 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         uuids = self.conn.list_instance_uuids()
         self.assertEqual(len(uuids), 0)
 
+    def _cached_files_exist(self, exists=True):
+        cache = ('[%s] vmware_base/fake_image_uuid/fake_image_uuid.vmdk' %
+                 self.ds)
+        if exists:
+            self.assertTrue(vmwareapi_fake.get_file(cache))
+        else:
+            self.assertFalse(vmwareapi_fake.get_file(cache))
+
     def test_instance_dir_disk_created(self):
         """Test image file is cached when even when use_linked_clone
             is False
@@ -431,7 +449,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         cache = ('[%s] vmware_base/%s/%s.vmdk' %
                  (self.ds, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID))
         self.assertTrue(vmwareapi_fake.get_file(inst_file_path))
-        self.assertTrue(vmwareapi_fake.get_file(cache))
+        self._cached_files_exist()
 
     def test_cache_dir_disk_created(self):
         """Test image disk is cached when use_linked_clone is True."""
@@ -1224,6 +1242,94 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.assertEqual(connector['host'], 'test_url')
         self.assertEqual(connector['initiator'], 'iscsi-name')
         self.assertNotIn('instance', connector)
+
+    def test_image_aging_image_used(self):
+        self._create_vm()
+        all_instances = [self.instance]
+        self.conn.manage_image_cache(self.context, all_instances)
+        self._cached_files_exist()
+
+    def _get_timestamp_filename(self):
+        return '%s%s' % (imagecache.TIMESTAMP_PREFIX,
+                         timeutils.strtime(at=self.old_time,
+                                           fmt=imagecache.TIMESTAMP_FORMAT))
+
+    def _override_time(self):
+        self.old_time = datetime.datetime(2012, 11, 22, 12, 00, 00)
+
+        def _fake_get_timestamp_filename(fake):
+            return self._get_timestamp_filename()
+
+        self.stubs.Set(imagecache.ImageCacheManager, '_get_timestamp_filename',
+                       _fake_get_timestamp_filename)
+
+    def _timestamp_file_exists(self, exists=True):
+        timestamp = ('[%s] vmware_base/fake_image_uuid/%s/' %
+                 (self.ds, self._get_timestamp_filename()))
+        if exists:
+            self.assertTrue(vmwareapi_fake.get_file(timestamp))
+        else:
+            self.assertFalse(vmwareapi_fake.get_file(timestamp))
+
+    def _image_aging_image_marked_for_deletion(self):
+        self._create_vm(uuid=uuidutils.generate_uuid())
+        self._cached_files_exist()
+        all_instances = []
+        self.conn.manage_image_cache(self.context, all_instances)
+        self._cached_files_exist()
+        self._timestamp_file_exists()
+
+    def test_image_aging_image_marked_for_deletion(self):
+        self._override_time()
+        self._image_aging_image_marked_for_deletion()
+
+    def _timestamp_file_removed(self):
+        self._override_time()
+        self._image_aging_image_marked_for_deletion()
+        self._create_vm(num_instances=2,
+                        uuid=uuidutils.generate_uuid())
+        self._timestamp_file_exists(exists=False)
+
+    def test_timestamp_file_removed_spawn(self):
+        self._timestamp_file_removed()
+
+    def test_timestamp_file_removed_aging(self):
+        self._timestamp_file_removed()
+        # mark as aged by another compute node
+        ts = self._get_timestamp_filename()
+        ts_path = ('[%s] vmware_base/fake_image_uuid/%s/' %
+                   (self.ds, ts))
+        vmwareapi_fake._add_file(ts_path)
+        self._timestamp_file_exists()
+        all_instances = [self.instance]
+        self.conn.manage_image_cache(self.context, all_instances)
+        self._timestamp_file_exists(exists=False)
+
+    def test_image_aging_disabled(self):
+        self._override_time()
+        self.flags(remove_unused_base_images=False)
+        self._create_vm()
+        self._cached_files_exist()
+        all_instances = []
+        self.conn.manage_image_cache(self.context, all_instances)
+        self._cached_files_exist(exists=True)
+
+    def _image_aging_aged(self, aging_time=100):
+        self._override_time()
+        self.cur_time = datetime.datetime(2012, 11, 22, 12, 00, 10)
+        self.flags(remove_unused_original_minimum_age_seconds=aging_time)
+        self._image_aging_image_marked_for_deletion()
+        all_instances = []
+        timeutils.set_time_override(self.cur_time)
+        self.conn.manage_image_cache(self.context, all_instances)
+
+    def test_image_aging_aged(self):
+        self._image_aging_aged(aging_time=8)
+        self._cached_files_exist(exists=False)
+
+    def test_image_aging_not_aged(self):
+        self._image_aging_aged()
+        self._cached_files_exist()
 
 
 class VMwareAPIHostTestCase(test.NoDBTestCase):

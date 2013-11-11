@@ -44,6 +44,7 @@ from nova.virt import configdrive
 from nova.virt import driver
 from nova.virt import imagehandler
 from nova.virt.vmwareapi import ds_util
+from nova.virt.vmwareapi import imagecache
 from nova.virt.vmwareapi import vif as vmwarevif
 from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vim_util
@@ -64,6 +65,7 @@ CONF = cfg.CONF
 CONF.register_group(vmware_group)
 CONF.register_opts(vmware_vif_opts, vmware_group)
 CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
+CONF.import_opt('remove_unused_base_images', 'nova.virt.imagecache')
 CONF.import_opt('vnc_enabled', 'nova.vnc')
 
 LOG = logging.getLogger(__name__)
@@ -101,6 +103,8 @@ class VMwareVMOps(object):
         self._is_neutron = utils.is_neutron()
         self._datastore_dc_mapping = {}
         self._datastore_browser_mapping = {}
+        self._imagecache = imagecache.ImageCacheManager(self._session,
+                                                        self._base_folder)
 
     def list_instances(self):
         """Lists the VM instances that are registered with the ESX host."""
@@ -133,7 +137,17 @@ class VMwareVMOps(object):
         LOG.debug(_("Got total of %s instances") % str(len(lst_vm_names)))
         return lst_vm_names
 
-    def _extend_virtual_disk(self, instance, requested_size, name, dc_ref):
+    def _create_folder(self, ds_ref, ds_name, ds_browser, name):
+        # Check if the folder exists or not. If not, create one
+        folder_path = ds_util.build_datastore_path(ds_name, name)
+        if not ds_util.path_exists(self._session, ds_browser, folder_path):
+            dc_info = self.get_datacenter_ref_and_name(ds_ref)
+            ds_util.mkdir(self._session,
+                          ds_util.build_datastore_path(ds_name, name),
+                          dc_info.ref)
+
+    def _extend_virtual_disk(self, instance, requested_size, name,
+                             datacenter):
         service_content = self._session._get_vim().get_service_content()
         LOG.debug(_("Extending root virtual disk to %s"), requested_size)
         vmdk_extend_task = self._session._call_method(
@@ -141,7 +155,7 @@ class VMwareVMOps(object):
                 "ExtendVirtualDisk_Task",
                 service_content.virtualDiskManager,
                 name=name,
-                datacenter=dc_ref,
+                datacenter=datacenter,
                 newCapacityKb=requested_size,
                 eagerZero=False)
         try:
@@ -154,7 +168,8 @@ class VMwareVMOps(object):
                 # Clean up files created during the extend operation
                 files = [name.replace(".vmdk", "-flat.vmdk"), name]
                 for file in files:
-                    ds_util.file_delete(self._session, instance, file, dc_ref)
+                    ds_util.file_delete(self._session, instance, file,
+                                        datacenter)
 
         LOG.debug(_("Extended root virtual disk"))
 
@@ -431,7 +446,9 @@ class VMwareVMOps(object):
             session_vim = self._session._get_vim()
             cookies = session_vim.client.options.transport.cookiejar
 
-            if not (self._check_if_folder_file_exists(
+            ds_browser = self._get_ds_browser(data_store_ref)
+
+            if not (self._check_if_folder_file_exists(ds_browser,
                                         data_store_ref, data_store_name,
                                         upload_folder, upload_name + ".vmdk")):
                 # Upload will be done to the self._tmp_folder and then moved
@@ -518,7 +535,7 @@ class VMwareVMOps(object):
                                                     root_gb)
                 root_vmdk_path = ds_util.build_datastore_path(data_store_name,
                                                               root_vmdk_name)
-                if not self._check_if_folder_file_exists(
+                if not self._check_if_folder_file_exists(ds_browser,
                                         data_store_ref, data_store_name,
                                         upload_folder,
                                         upload_name + ".%s.vmdk" % root_gb):
@@ -566,6 +583,14 @@ class VMwareVMOps(object):
                     data_store_ref,
                     uploaded_iso_path,
                     1 if adapter_type in ['ide'] else 0)
+
+            # Check if the timestamp file exists - if so then delete it
+            if CONF.remove_unused_base_images:
+                folder = '%s/%s' % (self._base_folder, upload_name)
+                ds_path = ds_util.build_datastore_path(data_store_name, folder)
+                self._imagecache.timestamp_cleanup(instance, dc_info.ref,
+                                                   ds_browser, data_store_ref,
+                                                   data_store_name, ds_path)
 
         else:
             # Attach the root disk to the VM.
@@ -762,17 +787,8 @@ class VMwareVMOps(object):
                 raise exception.DatastoreNotFound()
             ds_ref = ds_ref_ret.ManagedObjectReference[0]
             ds_browser = self._get_ds_browser(ds_ref)
-            # Check if the self._tmp_folder folder exists or not. If not,
-            # create one
-            tmp_folder_path = ds_util.build_datastore_path(datastore_name,
-                                                           self._tmp_folder)
-            if not ds_util.path_exists(self._session, ds_browser,
-                                       tmp_folder_path):
-                dc_info = self.get_datacenter_ref_and_name(ds_ref)
-                ds_util.mkdir(self._session,
-                              ds_util.build_datastore_path(datastore_name,
-                                                           self._tmp_folder),
-                              dc_info.ref)
+            self._create_folder(ds_ref, datastore_name, ds_browser,
+                                self._tmp_folder)
             return ds_ref
 
         ds_ref = _check_if_tmp_folder_exists()
@@ -987,13 +1003,9 @@ class VMwareVMOps(object):
                     ds_ref = ds_ref_ret.ManagedObjectReference[0]
                     dc_info = self.get_datacenter_ref_and_name(ds_ref)
                     vim = self._session._get_vim()
-                    delete_task = self._session._call_method(
-                        vim,
-                        "DeleteDatastoreFile_Task",
-                        vim.get_service_content().fileManager,
-                        name=dir_ds_compliant_path,
-                        datacenter=dc_info.ref)
-                    self._session._wait_for_task(instance['uuid'], delete_task)
+                    ds_util.file_delete(self._session, instance,
+                                        dir_ds_compliant_path,
+                                        dc_info.ref)
                     LOG.debug(_("Deleted contents of the VM from "
                                 "datastore %(datastore_name)s") %
                                {'datastore_name': datastore_name},
@@ -1533,9 +1545,8 @@ class VMwareVMOps(object):
         vm_folder_ref = dc_objs.objects[0].propSet[0].val
         return vm_folder_ref
 
-    def _check_if_folder_file_exists(self, ds_ref, ds_name,
+    def _check_if_folder_file_exists(self, ds_browser, ds_ref, ds_name,
                                      folder_name, file_name):
-        ds_browser = self._get_ds_browser(ds_ref)
         # Check if the folder exists or not. If not, create one
         # Check if the file exists or not.
         folder_path = ds_util.build_datastore_path(ds_name, folder_name)
@@ -1543,11 +1554,8 @@ class VMwareVMOps(object):
                 ds_browser, folder_path, file_name)
         # Ensure that the cache folder exists
         if not folder_exists:
-            dc_info = self.get_datacenter_ref_and_name(ds_ref)
-            ds_util.mkdir(self._session,
-                          ds_util.build_datastore_path(ds_name,
-                                                       self._base_folder),
-                          dc_info.ref)
+            self._create_folder(ds_ref, ds_name, ds_browser,
+                                self._base_folder)
 
         return file_exists
 
@@ -1567,6 +1575,21 @@ class VMwareVMOps(object):
         """Unplug VIFs from networks."""
         msg = _("VIF unplugging is not supported by the VMware driver.")
         raise NotImplementedError(msg)
+
+    def manage_image_cache(self, context, instances):
+        if not CONF.remove_unused_base_images:
+            LOG.debug(_("Image aging disabled. Aging will not be done."))
+            return
+
+        datastores = vm_util.get_available_datastores(self._session,
+                                                      self._cluster,
+                                                      self._datastore_regex)
+
+        datastores_info = []
+        for ds in datastores:
+            ds_info = self.get_datacenter_ref_and_name(ds['ref'])
+            datastores_info.append((ds, ds_info))
+        self._imagecache.update(context, instances, datastores_info)
 
 
 class VMwareVCVMOps(VMwareVMOps):

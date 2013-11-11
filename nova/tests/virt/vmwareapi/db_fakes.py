@@ -20,10 +20,14 @@
 Stubouts, mocks and fixtures for the test suite
 """
 
+from oslo.config import cfg
+
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import db
 from nova import utils
+
+CONF = cfg.CONF
 
 
 def stub_out_db_instance_api(stubs):
@@ -82,7 +86,8 @@ def stub_out_db_instance_api(stubs):
             'mac_addresses': [{'address': values['mac_address']}],
             'root_gb': type_data['root_gb'],
             'node': values['node'],
-            'metadata': []
+            'metadata': [],
+            'host': CONF.host,
             }
 
         return base_options

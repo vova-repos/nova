@@ -25,6 +25,7 @@ from oslo.config import cfg
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova.openstack.common import uuidutils
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
 
@@ -54,6 +55,10 @@ def split_datastore_path(datastore_path):
 def file_delete(session, instance, datastore_path, dc_ref):
     LOG.debug(_("Deleting the datastore file %s"), datastore_path,
               instance=instance)
+    if instance:
+        uuid = instance['uuid']
+    else:
+        uuid = uuidutils.generate_uuid()
     vim = session._get_vim()
     file_delete_task = session._call_method(
             session._get_vim(),
@@ -61,7 +66,7 @@ def file_delete(session, instance, datastore_path, dc_ref):
             vim.get_service_content().fileManager,
             name=datastore_path,
             datacenter=dc_ref)
-    session._wait_for_task(instance['uuid'], file_delete_task)
+    session._wait_for_task(uuid, file_delete_task)
     LOG.debug(_("Deleted the datastore file"), instance=instance)
 
 
@@ -146,3 +151,21 @@ def mkdir(session, ds_path, dc_ref):
             name=ds_path, datacenter=dc_ref,
             createParentDirectories=True)
     LOG.debug(_("Created directory with path %s"), ds_path)
+
+
+def get_sub_folders(session, ds_browser, ds_path):
+    folders = set()
+    if not path_exists(session, ds_browser, ds_path):
+        return folders
+    client_factory = session._get_vim().client.factory
+    search_task = session._call_method(
+            session._get_vim(),
+            "SearchDatastore_Task",
+            ds_browser,
+            datastorePath=ds_path)
+    task_info = _task_info_state_get(session, search_task)
+    # populate the cached images
+    if hasattr(task_info.result, 'file'):
+        for file in task_info.result.file:
+            folders.add(file.path)
+    return folders
