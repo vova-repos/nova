@@ -89,6 +89,9 @@ def vm_ref_cache_from_name(func):
 # the config key which stores the VNC port
 VNC_CONFIG_KEY = 'config.extraConfig["RemoteDisplay.vnc.port"]'
 
+ALL_SUPPORTED_DS_TYPES = ['VMFS', 'NFS', 'vsan']
+NON_STREAMABLE_DS_TYPES = ['VMFS', 'NFS']
+
 
 def get_vm_create_spec(client_factory, instance, name, data_store_name,
                        vif_infos, os_type="otherGuest"):
@@ -947,16 +950,18 @@ def get_vm_state_from_name(session, vm_name):
     return vm_state
 
 
-def _is_valid_ds_record(ds, datastore_regex=None):
+def _is_valid_ds_record(ds, datastore_regex=None,
+                        allowed_ds_types=ALL_SUPPORTED_DS_TYPES):
     """Checks if the given datastore record is valid.
 
     :param ds: a datastore record
     :param datastore_regex: an optional regular expression to match names
+    :param allowed_ds_types: a list of acceptable datastore type names
     :return: True if a valid datastore record
     """
     # Local storage identifier vSphere doesn't support CIFS or
     # vfat for datastores, therefore filtered
-    if ds.accessible and ds.type in ['VMFS', 'NFS']:
+    if ds.accessible and ds.type in allowed_ds_types:
         if datastore_regex is None or datastore_regex.match(ds.name):
             return True
     return False
@@ -1082,12 +1087,14 @@ def propset_dict(propset):
     return dict([(prop.name, prop.val) for prop in propset])
 
 
-def _select_datastore(data_stores, best_match, datastore_regex=None):
+def _select_datastore(data_stores, best_match, datastore_regex=None,
+                      allowed_ds_types=ALL_SUPPORTED_DS_TYPES):
     """Find the most preferable datastore in a given RetrieveResult object.
 
     :param data_stores: a RetrieveResult object from vSphere API call
     :param best_match: the current best match for datastore
     :param datastore_regex: an optional regular expression to match names
+    :param allowed_ds_types: a list of acceptable datastore type names
     :return: datastore_ref, datastore_name, capacity, freespace
     """
 
@@ -1107,7 +1114,7 @@ def _select_datastore(data_stores, best_match, datastore_regex=None):
                     capacity=propdict['summary.capacity'],
                     type=ds_type,
                     accessible=propdict.get('summary.accessible'))
-        if _is_valid_ds_record(new_ds, datastore_regex):
+        if _is_valid_ds_record(new_ds, datastore_regex, allowed_ds_types):
             # favor datastores with more free space
             if new_ds.freespace > best_match.freespace:
                 best_match = new_ds
@@ -1116,7 +1123,8 @@ def _select_datastore(data_stores, best_match, datastore_regex=None):
 
 
 def get_datastore_ref_and_name(session, cluster=None, host=None,
-                               datastore_regex=None):
+                               datastore_regex=None,
+                               allowed_ds_types=ALL_SUPPORTED_DS_TYPES):
     """Get the datastore list and choose the most preferable one."""
     if cluster is None and host is None:
         data_stores = session._call_method(vim_util, "get_objects",
@@ -1148,7 +1156,8 @@ def get_datastore_ref_and_name(session, cluster=None, host=None,
                           freespace=None, type=None, accessible=False)
     while data_stores:
         best_match = _select_datastore(data_stores, best_match,
-                                       datastore_regex)
+                                       datastore_regex,
+                                       allowed_ds_types)
         token = _get_token(data_stores)
         if not token:
             break

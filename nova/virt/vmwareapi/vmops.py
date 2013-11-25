@@ -361,8 +361,10 @@ class VMwareVMOps(object):
         client_factory = self._session._get_vim().client.factory
         service_content = self._session._get_vim().service_content
 
+        allowed_ds_types = VMwareVMOps.get_allowed_datastore_types(disk_type)
         ds = vm_util.get_datastore_ref_and_name(self._session, self._cluster,
-                 datastore_regex=self._datastore_regex)
+                 datastore_regex=self._datastore_regex,
+                 allowed_ds_types=allowed_ds_types)
         data_store_ref = ds[0]
         data_store_name = ds[1]
         dc_info = self.get_datacenter_ref_and_name(data_store_ref)
@@ -828,6 +830,12 @@ class VMwareVMOps(object):
         LOG.debug(_("Reconfigured VM instance %(instance_name)s to attach "
                     "cdrom %(file_path)s"),
                   {'instance_name': instance_name, 'file_path': file_path})
+
+    @staticmethod
+    def get_allowed_datastore_types(disk_type):
+        if disk_type == 'streamOptimized':
+            return vm_util.ALL_SUPPORTED_DS_TYPES
+        return vm_util.NON_STREAMABLE_DS_TYPES
 
     @staticmethod
     def decide_linked_clone(image_linked_clone, global_linked_clone):

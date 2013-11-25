@@ -103,6 +103,7 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
             ['BAD', 'some-name-bad', True, 98765432100, 1234678900],
             ['VMFS', 'some-name-good', True, 987654321, 12346789],
             ['VMFS', 'some-other-good', False, 987654321000, 12346789000],
+            ['vsan', 'some-vsan-good', True, 987654321, 123467890],
         ]
         # only the DS some-name-good is accessible and matches the regex
         datastores = self.build_result_set(data)
@@ -113,7 +114,8 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
             accessible=False)
         rec = vm_util._select_datastore(datastores,
                                         best_match,
-                                        datastore_regex)
+                                        datastore_regex,
+                                        vm_util.NON_STREAMABLE_DS_TYPES)
 
         self.assertIsNotNone(rec, "could not find datastore!")
         self.assertEqual('ds-003', rec[0].value,
@@ -122,6 +124,22 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
                             "accepted an unreachable datastore!")
         self.assertEqual('some-name-good', rec[1])
         self.assertEqual(12346789, rec[3],
+                         "did not obtain correct freespace!")
+        self.assertEqual(987654321, rec[2],
+                         "did not obtain correct capacity!")
+
+        rec = vm_util._select_datastore(datastores,
+                                        best_match,
+                                        datastore_regex,
+                                        vm_util.ALL_SUPPORTED_DS_TYPES)
+
+        self.assertIsNotNone(rec, "could not find datastore!")
+        self.assertEqual('ds-005', rec[0].value,
+                         "didn't find the right datastore!")
+        self.assertNotEqual('ds-003', rec[0].value,
+                            "accepted an unreachable datastore!")
+        self.assertEqual('some-vsan-good', rec[1])
+        self.assertEqual(123467890, rec[3],
                          "did not obtain correct freespace!")
         self.assertEqual(987654321, rec[2],
                          "did not obtain correct capacity!")
