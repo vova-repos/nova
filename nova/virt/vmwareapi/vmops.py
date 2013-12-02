@@ -1797,6 +1797,117 @@ class VMwareVMOps(object):
             datastores_info.append((ds, ds_info))
         self._imagecache.update(context, instances, datastores_info)
 
+    def _get_vm_port_indices(self, vm_ref):
+        extra_config = self._session._call_method(vim_util,
+                                                  'get_dynamic_property',
+                                                  vm_ref, 'VirtualMachine',
+                                                  'config.extraConfig')
+        ports = []
+        if extra_config:
+            options = extra_config.OptionValue
+            for option in options:
+                if (option.key.startswith('nvp.iface-id.') and
+                        option.value != 'free'):
+                    ports.append(int(option.key.split('.')[2]))
+        return ports
+
+    def _get_attach_port_index(self, vm_ref):
+        # Get the first free port index
+        ports = self._get_vm_port_indices(vm_ref)
+        # No ports are configured on the VM
+        if not ports:
+            return 0
+        ports.sort()
+        configured_ports = len(ports)
+        # Find the first free port index
+        for port_index in range(configured_ports):
+            if port_index != ports[port_index]:
+                return port_index
+        return configured_ports
+
+    def attach_interface(self, instance, image_meta, vif):
+        """Attach an interface to the instance."""
+        vm_ref = vm_util.get_vm_ref(self._session, instance)
+        instance_uuid = instance['uuid']
+        client_factory = self._session._get_vim().client.factory
+
+        vif_model = image_meta.get("hw_vif_model",
+                                   network_model.VIF_MODEL_E1000)
+        mac = vif['address']
+        name = vif['network']['bridge'] or CONF.vmware.integration_bridge
+        ref = vmwarevif.get_network_ref(self._session,
+                                        self._cluster,
+                                        vif,
+                                        self._is_neutron)
+        vif_info = {'network_name': name,
+                    'mac_address': mac,
+                    'network_ref': ref,
+                    'iface_id': vif['id'],
+                    'vif_model': vm_util.convert_vif_model(vif_model)
+                   }
+
+        port_index = self._get_attach_port_index(vm_ref)
+        network_attach_config_spec = vm_util.get_network_attach_config_spec(
+                                    client_factory, vif_info, port_index)
+        LOG.debug(_("Reconfiguring VM to attach interface"), instance=instance)
+        reconfig_task = self._session._call_method(
+                                        self._session._get_vim(),
+                                        "ReconfigVM_Task", vm_ref,
+                                        spec=network_attach_config_spec)
+        try:
+            self._session._wait_for_task(reconfig_task)
+        except Exception as e:
+            LOG.error(_('Attaching network adapter failed. Exception: %s'),
+                      e, instance=instance)
+            raise exception.InterfaceAttachFailed(instance)
+        LOG.debug(_("Reconfigured VM to attach interface"), instance=instance)
+
+    def _get_vm_detach_port_index(self, vm_ref, iface_id):
+        extra_config = self._session._call_method(vim_util,
+                                                  'get_dynamic_property',
+                                                  vm_ref, 'VirtualMachine',
+                                                  'config.extraConfig')
+        if extra_config:
+            options = extra_config.OptionValue
+            for option in options:
+                if (option.key.startswith('nvp.iface-id.') and
+                    option.value == iface_id):
+                    return int(option.key.split('.')[2])
+
+    def detach_interface(self, instance, vif):
+        """Detach an interface from the instance."""
+        vm_ref = vm_util.get_vm_ref(self._session, instance)
+        port_index = self._get_vm_detach_port_index(vm_ref, vif['id'])
+        if port_index is None:
+            msg = _("No device with interface-id %s exists on VM") % vif['id']
+            raise exception.NotFound(msg)
+
+        hardware_devices = self._session._call_method(vim_util,
+                        "get_dynamic_property", vm_ref,
+                        "VirtualMachine", "config.hardware.device")
+        device = vm_util.get_network_device(hardware_devices, vif['address'])
+        if not device:
+            msg = _("No device with MAC address %s exists on the "
+                    "VM") % vif['address']
+            raise exception.NotFound(msg)
+
+        instance_uuid = instance['uuid']
+        client_factory = self._session._get_vim().client.factory
+        network_detach_config_spec = vm_util.get_network_detach_config_spec(
+                                    client_factory, device, port_index)
+        LOG.debug(_("Reconfiguring VM to detach interface"), instance=instance)
+        reconfig_task = self._session._call_method(
+                                        self._session._get_vim(),
+                                        "ReconfigVM_Task", vm_ref,
+                                        spec=network_detach_config_spec)
+        try:
+            self._session._wait_for_task(reconfig_task)
+        except Exception as e:
+            LOG.error(_('Detaching network adapter failed. Exception: %s'),
+                      e, instance=instance)
+            raise exception.InterfaceDetachFailed(instance)
+        LOG.debug(_("Reconfigured VM to detach interface"), instance=instance)
+
 
 class VMwareVCVMOps(VMwareVMOps):
     """Management class for VM-related tasks.

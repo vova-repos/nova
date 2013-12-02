@@ -98,6 +98,13 @@ ALL_SUPPORTED_DS_TYPES = ['VMFS', 'NFS', 'vsan']
 NON_STREAMABLE_DS_TYPES = ['VMFS', 'NFS']
 
 
+def _get_vif_info_option(client_factory, iface_id, port_index):
+    opt = client_factory.create('ns0:OptionValue')
+    opt.key = "nvp.iface-id.%d" % port_index
+    opt.value = iface_id
+    return opt
+
+
 def get_vm_create_spec(client_factory, instance, name, data_store_name,
                        vif_infos, os_type="otherGuest", profile_spec=None):
     """Builds the VM Create spec."""
@@ -148,14 +155,13 @@ def get_vm_create_spec(client_factory, instance, name, data_store_name,
     opt.value = instance['uuid']
     extra_config.append(opt)
 
-    i = 0
+    port_index = 0
     for vif_info in vif_infos:
         if vif_info['iface_id']:
-            opt = client_factory.create('ns0:OptionValue')
-            opt.key = "nvp.iface-id.%d" % i
-            opt.value = vif_info['iface_id']
-            extra_config.append(opt)
-            i += 1
+            extra_config.append(_get_vif_info_option(client_factory,
+                                                     vif_info['iface_id'],
+                                                     port_index))
+            port_index += 1
 
     config_spec.extraConfig = extra_config
 
@@ -195,7 +201,7 @@ def create_controller_spec(client_factory, key, adapter_type="lsiLogic"):
     return virtual_device_config
 
 
-def _convert_vif_model(name):
+def convert_vif_model(name):
     """Converts standard VIF_MODEL types to the internal VMware ones."""
     if name == network_model.VIF_MODEL_E1000:
         return 'VirtualE1000'
@@ -215,7 +221,7 @@ def create_network_spec(client_factory, vif_info):
     network_spec.operation = "add"
 
     # Keep compatible with other Hyper vif model parameter.
-    vif_info['vif_model'] = _convert_vif_model(vif_info['vif_model'])
+    vif_info['vif_model'] = convert_vif_model(vif_info['vif_model'])
 
     vif = 'ns0:' + vif_info['vif_model']
     net_device = client_factory.create(vif)
@@ -266,6 +272,35 @@ def create_network_spec(client_factory, vif_info):
 
     network_spec.device = net_device
     return network_spec
+
+
+def get_network_attach_config_spec(client_factory, vif_info, index):
+    """Builds the vif attach config spec."""
+    config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
+    vif_spec = create_network_spec(client_factory, vif_info)
+    config_spec.deviceChange = [vif_spec]
+    if vif_info['iface_id']:
+        config_spec.extraConfig = [_get_vif_info_option(client_factory,
+                                                        vif_info['iface_id'],
+                                                        index)]
+    return config_spec
+
+
+def get_network_detach_config_spec(client_factory, device, port_index):
+    """Builds the vif detach config spec."""
+    config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
+    virtual_device_config = client_factory.create(
+                            'ns0:VirtualDeviceConfigSpec')
+    virtual_device_config.operation = "remove"
+    virtual_device_config.device = device
+    config_spec.deviceChange = [virtual_device_config]
+    # If a key is aready present then it cannot be deleted, only updated.
+    # This enables us to reuse this key if there is an additional
+    # attachment.
+    config_spec.extraConfig = [_get_vif_info_option(client_factory,
+                                                    'free',
+                                                    port_index)]
+    return config_spec
 
 
 def get_vmdk_attach_config_spec(client_factory,
@@ -1444,6 +1479,17 @@ def get_vmdk_adapter_type(adapter_type):
     else:
         vmdk_adapter_type = adapter_type
     return vmdk_adapter_type
+
+
+def get_network_device(hardware_devices, mac_address):
+    """Return the network device with MAC 'mac_address'."""
+    if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
+        hardware_devices = hardware_devices.VirtualDevice
+    for device in hardware_devices:
+        if device.__class__.__name__ in ALL_SUPPORTED_NETWORK_DEVICES:
+            if hasattr(device, 'macAddress'):
+                if device.macAddress == mac_address:
+                    return device
 
 
 def _select_datastores_matching_storage_policy(session, data_stores,

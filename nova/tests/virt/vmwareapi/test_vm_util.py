@@ -645,18 +645,18 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
 
     def test_convert_vif_model(self):
         expected = "VirtualE1000"
-        result = vm_util._convert_vif_model(network_model.VIF_MODEL_E1000)
+        result = vm_util.convert_vif_model(network_model.VIF_MODEL_E1000)
         self.assertEqual(expected, result)
         expected = "VirtualE1000e"
-        result = vm_util._convert_vif_model(network_model.VIF_MODEL_E1000E)
+        result = vm_util.convert_vif_model(network_model.VIF_MODEL_E1000E)
         self.assertEqual(expected, result)
         types = ["VirtualE1000", "VirtualE1000e", "VirtualPCNet32",
                  "VirtualVmxnet"]
         for type in types:
             self.assertEqual(type,
-                             vm_util._convert_vif_model(type))
+                             vm_util.convert_vif_model(type))
         self.assertRaises(exception.Invalid,
-                          vm_util._convert_vif_model,
+                          vm_util.convert_vif_model,
                           "InvalidVifModel")
 
     def test_vm_create_spec_with_profile_spec(self):

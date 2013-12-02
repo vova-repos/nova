@@ -385,6 +385,14 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Manage the local cache of images."""
         self._vmops.manage_image_cache(context, all_instances)
 
+    def attach_interface(self, instance, image_meta, vif):
+        """Attach an interface to the instance."""
+        self._vmops.attach_interface(instance, image_meta, vif)
+
+    def detach_interface(self, instance, vif):
+        """Detach an interface from the instance."""
+        self._vmops.detach_interface(instance, vif)
+
 
 class VMwareVCDriver(VMwareESXDriver):
     """The VC host connection object."""
@@ -765,6 +773,16 @@ class VMwareVCDriver(VMwareESXDriver):
         """inject network info for specified instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.inject_network_info(instance, network_info)
+
+    def attach_interface(self, instance, image_meta, vif):
+        """Attach an interface to the instance."""
+        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        _vmops.attach_interface(instance, image_meta, vif)
+
+    def detach_interface(self, instance, vif):
+        """Detach an interface from the instance."""
+        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        _vmops.detach_interface(instance, vif)
 
     def manage_image_cache(self, context, all_instances):
         """Manage the local cache of images."""

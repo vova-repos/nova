@@ -42,6 +42,7 @@ from nova.compute import task_states
 from nova import context
 from nova import db
 from nova import exception
+from nova.network import model as network_model
 from nova.openstack.common import jsonutils
 from nova.openstack.common import lockutils
 from nova.openstack.common import timeutils
@@ -414,7 +415,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         found_vm_uuid = False
         found_iface_id = False
-        for c in vm.get("config.extraConfig").OptionValue:
+        extras = vm.get("config.extraConfig")
+        for c in extras.OptionValue:
             if (c.key == "nvp.vm-uuid" and c.value == self.instance['uuid']):
                 found_vm_uuid = True
             if (c.key == "nvp.iface-id.0" and c.value == "vif-xxx-yyy-zzz"):
@@ -2046,6 +2048,128 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase):
         self.assertRaises(NotImplementedError,
                           self.conn.unplug_vifs,
                           instance=self.instance, network_info=None)
+
+    def _create_vif(self):
+        gw_4 = network_model.IP(address='101.168.1.1', type='gateway')
+        dns_4 = network_model.IP(address='8.8.8.8', type=None)
+        ips_4 = [network_model.IP(address='101.168.1.9', type=None)]
+        subnet_4 = network_model.Subnet(cidr='101.168.1.0/24',
+                                        dns=[dns_4],
+                                        gateway=gw_4,
+                                        routes=None,
+                                        dhcp_server='191.168.1.1')
+
+        gw_6 = network_model.IP(address='101:1db9::1', type='gateway')
+        subnet_6 = network_model.Subnet(cidr='101:1db9::/64',
+                                        dns=None,
+                                        gateway=gw_6,
+                                        ips=None,
+                                        routes=None)
+
+        network_neutron = network_model.Network(id='network-id-xxx-yyy-zzz',
+                                                bridge=None,
+                                                label=None,
+                                                subnets=[subnet_4,
+                                                         subnet_6],
+                                                bridge_interface='eth0',
+                                                vlan=99)
+
+        vif_bridge_neutron = network_model.VIF(id='new-vif-xxx-yyy-zzz',
+                                               address='ca:fe:de:ad:be:ef',
+                                               network=network_neutron,
+                                               type=None,
+                                               devname='tap-xxx-yyy-zzz',
+                                               ovs_interfaceid='aaa-bbb-ccc')
+        return vif_bridge_neutron
+
+    def _validate_interface_update(self, id, index, num_iface_ids):
+        vm_info = self.conn.get_info({'uuid': self.uuid,
+                                      'node': self.instance_node})
+        vms = vmwareapi_fake._get_objects("VirtualMachine")
+        vm = vms.objects[0]
+
+        found_iface_id = False
+        extras = vm.get("config.extraConfig")
+        key = "nvp.iface-id.%s" % index
+        num_found = 0
+        for c in extras.OptionValue:
+            if c.key.startswith("nvp.iface-id."):
+                num_found += 1
+            if (c.key == key and c.value == id):
+                found_iface_id = True
+        self.assertTrue(found_iface_id)
+        self.assertEqual(num_found, num_iface_ids)
+
+    def _attach_interface(self, vif):
+        self._create_vm()
+        self.conn.attach_interface(self.instance, self.image, vif)
+        self._validate_interface_update(vif['id'], 1, 2)
+
+    def test_attach_interface(self):
+        vif = self._create_vif()
+        self._attach_interface(vif)
+
+    def test_attach_interface_with_exception(self):
+        self._create_vm()
+        vif = self._create_vif()
+
+        def fake_wait_for_task(instance_uuid, task_ref):
+            raise Exception()
+
+        with (
+            mock.patch.object(self.conn._session, '_wait_for_task',
+                              fake_wait_for_task)
+        ):
+            self.assertRaises(exception.InterfaceAttachFailed,
+                              self.conn.attach_interface,
+                              self.instance, self.image, vif)
+
+    @mock.patch.object(vm_util, 'get_network_device',
+                       return_value='fake_device')
+    def _detach_interface(self, vif, mock_get_device):
+        self._attach_interface(vif)
+        self.conn.detach_interface(self.instance, vif)
+        self._validate_interface_update('free', 1, 2)
+
+    def test_detach_interface(self):
+        vif = self._create_vif()
+        self._detach_interface(vif)
+
+    def test_detach_interface_and_attach(self):
+        vif = self._create_vif()
+        self._detach_interface(vif)
+        self.conn.attach_interface(self.instance, self.image, vif)
+        self._validate_interface_update(vif['id'], 1, 2)
+
+    def test_detach_interface_no_device(self):
+        vif = self._create_vif()
+        self._attach_interface(vif)
+        self.assertRaises(exception.NotFound, self.conn.detach_interface,
+                          self.instance, vif)
+
+    def test_detach_interface_no_vif_match(self):
+        vif = self._create_vif()
+        self._attach_interface(vif)
+        vif['id'] = 'bad-id'
+        self.assertRaises(exception.NotFound, self.conn.detach_interface,
+                          self.instance, vif)
+
+    @mock.patch.object(vm_util, 'get_network_device',
+                       return_value='fake_device')
+    def test_detach_interface_with_exception(self, mock_get_device):
+        vif = self._create_vif()
+        self._attach_interface(vif)
+
+        def fake_wait_for_task(instance_uuid, task_ref):
+            raise Exception()
+
+        with (
+            mock.patch.object(self.conn._session, '_wait_for_task',
+                              fake_wait_for_task)
+        ):
+            self.assertRaises(exception.InterfaceDetachFailed,
+                              self.conn.detach_interface,
+                              self.instance, vif)
 
     def test_migrate_disk_and_power_off(self):
         def fake_update_instance_progress(context, instance, step,
