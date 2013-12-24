@@ -24,7 +24,6 @@ Class for VM tasks like spawn, snapshot, suspend, resume etc.
 import collections
 import copy
 import os
-import time
 
 from oslo.config import cfg
 
@@ -44,6 +43,7 @@ from nova import utils
 from nova.virt import configdrive
 from nova.virt import driver
 from nova.virt import imagehandler
+from nova.virt.vmwareapi import ds_util
 from nova.virt.vmwareapi import vif as vmwarevif
 from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vim_util
@@ -100,6 +100,7 @@ class VMwareVMOps(object):
         self._poll_rescue_last_ran = None
         self._is_neutron = utils.is_neutron()
         self._datastore_dc_mapping = {}
+        self._datastore_browser_mapping = {}
 
     def list_instances(self):
         """Lists the VM instances that are registered with the ESX host."""
@@ -153,23 +154,9 @@ class VMwareVMOps(object):
                 # Clean up files created during the extend operation
                 files = [name.replace(".vmdk", "-flat.vmdk"), name]
                 for file in files:
-                    self._delete_datastore_file(instance, file, dc_ref)
+                    ds_util.file_delete(self._session, instance, file, dc_ref)
 
         LOG.debug(_("Extended root virtual disk"))
-
-    def _delete_datastore_file(self, instance, datastore_path, dc_ref):
-        LOG.debug(_("Deleting the datastore file %s") % datastore_path,
-                  instance=instance)
-        vim = self._session._get_vim()
-        file_delete_task = self._session._call_method(
-                self._session._get_vim(),
-                "DeleteDatastoreFile_Task",
-                vim.get_service_content().fileManager,
-                name=datastore_path,
-                datacenter=dc_ref)
-        self._session._wait_for_task(instance['uuid'],
-                                     file_delete_task)
-        LOG.debug(_("Deleted the datastore file"), instance=instance)
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info, block_device_info=None,
@@ -329,9 +316,10 @@ class VMwareVMOps(object):
             LOG.debug(_("Creating temporary folder for %(folder)s on "
                         "datastore %(datastore)s."),
                       {'folder': folder, 'datastore': data_store_name})
-            self._mkdir(vm_util.build_datastore_path(data_store_name,
-                                                     folder),
-                        data_store_ref)
+            ds_util.mkdir(self._session,
+                          ds_util.build_datastore_path(data_store_name,
+                                                       folder),
+                          dc_info.ref)
             LOG.debug(_("Creating Virtual Disk of size  "
                       "%(vmdk_file_size_in_kb)s KB and adapter type "
                       "%(adapter_type)s on the ESX host local store "
@@ -358,27 +346,6 @@ class VMwareVMOps(object):
                          "disk_type": disk_type,
                          "data_store_name": data_store_name},
                       instance=instance)
-
-        def _move_image_to_cache_folder(tmp_folder, base_folder):
-            LOG.debug(_("Moving temporary folder %(tmp)s to cache "
-                        "folder %(cache)s."),
-                      {'tmp': tmp_folder, 'cache': base_folder})
-            vmdk_move_task = self._session._call_method(
-                self._session._get_vim(),
-                "MoveDatastoreFile_Task",
-                service_content.fileManager,
-                sourceName=vm_util.build_datastore_path(data_store_name,
-                                                        tmp_folder),
-                sourceDatacenter=dc_info.ref,
-                destinationName=vm_util.build_datastore_path(data_store_name,
-                                                             base_folder),
-                destinationDatacenter=dc_info.ref)
-            # TODO(garyk): ensure that _wait_for_task raises an exception that
-            # can be specifically treated here.
-            try:
-                self._session._wait_for_task(instance['uuid'], vmdk_move_task)
-            except Exception as e:
-                LOG.warning(_("File moving failed - %s"), e)
 
         def _fetch_image_on_datastore():
             """Fetch image from Glance to datastore."""
@@ -458,7 +425,7 @@ class VMwareVMOps(object):
 
             # The vmdk meta-data file
             uploaded_vmdk_name = "%s/%s.vmdk" % (upload_folder, upload_name)
-            uploaded_vmdk_path = vm_util.build_datastore_path(data_store_name,
+            uploaded_vmdk_path = ds_util.build_datastore_path(data_store_name,
                                                 uploaded_vmdk_name)
 
             session_vim = self._session._get_vim()
@@ -481,22 +448,23 @@ class VMwareVMOps(object):
                 sparse_uploaded_vmdk_name = "%s/%s-sparse.vmdk" % (
                                             upload_folder, upload_name)
 
-                flat_uploaded_vmdk_path = vm_util.build_datastore_path(
+                flat_uploaded_vmdk_path = ds_util.build_datastore_path(
                                                     data_store_name,
                                                     flat_uploaded_vmdk_name)
-                sparse_uploaded_vmdk_path = vm_util.build_datastore_path(
+                sparse_uploaded_vmdk_path = ds_util.build_datastore_path(
                                                     data_store_name,
                                                     sparse_uploaded_vmdk_name)
 
                 vmdk_name = "%s/%s.vmdk" % (upload_folder, upload_name)
-                vmdk_path = vm_util.build_datastore_path(data_store_name,
+                vmdk_path = ds_util.build_datastore_path(data_store_name,
                                                          vmdk_name)
                 if disk_type != "sparse":
                    # Create a flat virtual disk and retain the metadata file.
                     _create_virtual_disk(upload_folder, vmdk_path)
-                    self._delete_datastore_file(instance,
-                                                flat_uploaded_vmdk_path,
-                                                dc_info.ref)
+                    ds_util.file_delete(self._session,
+                                        instance,
+                                        flat_uploaded_vmdk_path,
+                                        dc_info.ref)
 
                 _fetch_image_on_datastore()
 
@@ -504,14 +472,22 @@ class VMwareVMOps(object):
                     # Copy the sparse virtual disk to a thin virtual disk.
                     disk_type = "thin"
                     _copy_virtual_disk(sparse_uploaded_vmdk_path, vmdk_path)
-                    self._delete_datastore_file(instance,
-                                                sparse_uploaded_vmdk_path,
-                                                dc_info.ref)
-
+                    ds_util.file_delete(self._session,
+                                        instance,
+                                        sparse_uploaded_vmdk_path,
+                                        dc_info.ref)
+                ds_browser = self._get_ds_browser(data_store_ref)
                 base_folder = '%s/%s' % (self._base_folder, upload_name)
-                _move_image_to_cache_folder(upload_folder, base_folder)
-                self._delete_datastore_file(instance,
-                        vm_util.build_datastore_path(data_store_name,
+                dest_folder = ds_util.build_datastore_path(data_store_name,
+                                                           base_folder)
+                if not ds_util.path_exists(self._session, ds_browser,
+                                           dest_folder):
+                    src_folder = ds_util.build_datastore_path(data_store_name,
+                                                              upload_folder)
+                    ds_util.move_folder(self._session, instance, dc_info.ref,
+                                        src_folder, dest_folder)
+                ds_util.file_delete(self._session, instance,
+                        ds_util.build_datastore_path(data_store_name,
                                                      tmp_upload_folder),
                         dc_info.ref)
             else:
@@ -528,7 +504,7 @@ class VMwareVMOps(object):
                 dest_name = instance['name']
                 dest_vmdk_name = "%s/%s.vmdk" % (dest_folder,
                                                  dest_name)
-                dest_vmdk_path = vm_util.build_datastore_path(
+                dest_vmdk_path = ds_util.build_datastore_path(
                     data_store_name, dest_vmdk_name)
                 _copy_virtual_disk(uploaded_vmdk_path, dest_vmdk_path)
 
@@ -540,7 +516,7 @@ class VMwareVMOps(object):
                 upload_folder = '%s/%s' % (self._base_folder, upload_name)
                 root_vmdk_name = "%s/%s.%s.vmdk" % (upload_folder, upload_name,
                                                     root_gb)
-                root_vmdk_path = vm_util.build_datastore_path(data_store_name,
+                root_vmdk_path = ds_util.build_datastore_path(data_store_name,
                                                               root_vmdk_name)
                 if not self._check_if_folder_file_exists(
                                         data_store_ref, data_store_name,
@@ -582,7 +558,7 @@ class VMwareVMOps(object):
                                                               dc_info.name,
                                                               instance['uuid'],
                                                               cookies)
-                uploaded_iso_path = vm_util.build_datastore_path(
+                uploaded_iso_path = ds_util.build_datastore_path(
                     data_store_name,
                     uploaded_iso_path)
                 self._attach_cdrom_to_vm(
@@ -747,7 +723,7 @@ class VMwareVMOps(object):
             (vmdk_file_path_before_snapshot, controller_key, adapter_type,
              disk_type, unit_number) = vm_util.get_vmdk_path_and_adapter_type(
                                         hardware_devices)
-            datastore_name = vm_util.split_datastore_path(
+            datastore_name = ds_util.split_datastore_path(
                                         vmdk_file_path_before_snapshot)[0]
             os_type = self._session._call_method(vim_util,
                         "get_dynamic_property", vm_ref,
@@ -785,16 +761,18 @@ class VMwareVMOps(object):
             if ds_ref_ret is None:
                 raise exception.DatastoreNotFound()
             ds_ref = ds_ref_ret.ManagedObjectReference[0]
-            ds_browser = self._session._call_method(
-                vim_util, "get_dynamic_property", ds_ref, "Datastore",
-                "browser")
-            # Check if the vmware-tmp folder exists or not. If not, create one
-            tmp_folder_path = vm_util.build_datastore_path(datastore_name,
+            ds_browser = self._get_ds_browser(ds_ref)
+            # Check if the self._tmp_folder folder exists or not. If not,
+            # create one
+            tmp_folder_path = ds_util.build_datastore_path(datastore_name,
                                                            self._tmp_folder)
-            if not self._path_exists(ds_browser, tmp_folder_path):
-                self._mkdir(vm_util.build_datastore_path(datastore_name,
-                                                         self._tmp_folder),
-                            ds_ref)
+            if not ds_util.path_exists(self._session, ds_browser,
+                                       tmp_folder_path):
+                dc_info = self.get_datacenter_ref_and_name(ds_ref)
+                ds_util.mkdir(self._session,
+                              ds_util.build_datastore_path(datastore_name,
+                                                           self._tmp_folder),
+                              dc_info.ref)
             return ds_ref
 
         ds_ref = _check_if_tmp_folder_exists()
@@ -803,9 +781,9 @@ class VMwareVMOps(object):
         # will be copied to. A random name is chosen so that we don't have
         # name clashes.
         random_name = uuidutils.generate_uuid()
-        dest_vmdk_file_path = vm_util.build_datastore_path(datastore_name,
+        dest_vmdk_file_path = ds_util.build_datastore_path(datastore_name,
                    "%s/%s.vmdk" % (self._tmp_folder, random_name))
-        dest_vmdk_data_file_path = vm_util.build_datastore_path(datastore_name,
+        dest_vmdk_data_file_path = ds_util.build_datastore_path(datastore_name,
                    "%s/%s-flat.vmdk" % (self._tmp_folder, random_name))
         dc_info = self.get_datacenter_ref_and_name(ds_ref)
 
@@ -870,7 +848,7 @@ class VMwareVMOps(object):
             # is retained too by design since it makes little sense to remove
             # it when the data disk it refers to still lingers.
             for f in dest_vmdk_data_file_path, dest_vmdk_file_path:
-                self._delete_datastore_file(instance, f, dc_info.ref)
+                ds_util.file_delete(self._session, instance, f, dc_info.ref)
 
         _clean_temp_data()
 
@@ -974,7 +952,7 @@ class VMwareVMOps(object):
             pwr_state = query['runtime.powerState']
             vm_config_pathname = query['config.files.vmPathName']
             if vm_config_pathname:
-                _ds_path = vm_util.split_datastore_path(vm_config_pathname)
+                _ds_path = ds_util.split_datastore_path(vm_config_pathname)
                 datastore_name, vmx_file_path = _ds_path
             # Power off the VM if it is in PoweredOn state.
             if pwr_state == "poweredOn":
@@ -998,7 +976,7 @@ class VMwareVMOps(object):
             # the datastore.
             if destroy_disks:
                 try:
-                    dir_ds_compliant_path = vm_util.build_datastore_path(
+                    dir_ds_compliant_path = ds_util.build_datastore_path(
                                      datastore_name,
                                      os.path.dirname(vmx_file_path))
                     LOG.debug(_("Deleting contents of the VM from "
@@ -1513,6 +1491,15 @@ class VMwareVMOps(object):
                   "port - %(port)s") % {'port': port},
                   instance=instance)
 
+    def _get_ds_browser(self, ds_ref):
+        ds_browser = self._datastore_browser_mapping.get(ds_ref)
+        if not ds_browser:
+            ds_browser = self._session._call_method(
+                vim_util, "get_dynamic_property", ds_ref, "Datastore",
+                "browser")
+            self._datastore_browser_mapping[ds_ref] = ds_browser
+        return ds_browser
+
     def get_datacenter_ref_and_name(self, ds_ref):
         """Get the datacenter name and the reference."""
         map = self._datastore_dc_mapping.get(ds_ref.value)
@@ -1546,81 +1533,21 @@ class VMwareVMOps(object):
         vm_folder_ref = dc_objs.objects[0].propSet[0].val
         return vm_folder_ref
 
-    def _path_exists(self, ds_browser, ds_path):
-        """Check if the path exists on the datastore."""
-        search_task = self._session._call_method(self._session._get_vim(),
-                                   "SearchDatastore_Task",
-                                   ds_browser,
-                                   datastorePath=ds_path)
-        # Wait till the state changes from queued or running.
-        # If an error state is returned, it means that the path doesn't exist.
-        while True:
-            task_info = self._session._call_method(vim_util,
-                                       "get_dynamic_property",
-                                       search_task, "Task", "info")
-            if task_info.state in ['queued', 'running']:
-                time.sleep(2)
-                continue
-            break
-        if task_info.state == "error":
-            return False
-        return True
-
-    def _path_file_exists(self, ds_browser, ds_path, file_name):
-        """Check if the path and file exists on the datastore."""
-        client_factory = self._session._get_vim().client.factory
-        search_spec = vm_util.search_datastore_spec(client_factory, file_name)
-        search_task = self._session._call_method(self._session._get_vim(),
-                                   "SearchDatastore_Task",
-                                   ds_browser,
-                                   datastorePath=ds_path,
-                                   searchSpec=search_spec)
-        # Wait till the state changes from queued or running.
-        # If an error state is returned, it means that the path doesn't exist.
-        while True:
-            task_info = self._session._call_method(vim_util,
-                                       "get_dynamic_property",
-                                       search_task, "Task", "info")
-            if task_info.state in ['queued', 'running']:
-                time.sleep(2)
-                continue
-            break
-        if task_info.state == "error":
-            return False, False
-
-        file_exists = (getattr(task_info.result, 'file', False) and
-                       task_info.result.file[0].path == file_name)
-        return True, file_exists
-
-    def _mkdir(self, ds_path, ds_ref):
-        """
-        Creates a directory at the path specified. If it is just "NAME",
-        then a directory with this name is created at the topmost level of the
-        DataStore.
-        """
-        LOG.debug(_("Creating directory with path %s") % ds_path)
-        dc_info = self.get_datacenter_ref_and_name(ds_ref)
-        self._session._call_method(self._session._get_vim(), "MakeDirectory",
-                    self._session._get_vim().get_service_content().fileManager,
-                    name=ds_path, datacenter=dc_info.ref,
-                    createParentDirectories=True)
-        LOG.debug(_("Created directory with path %s") % ds_path)
-
     def _check_if_folder_file_exists(self, ds_ref, ds_name,
                                      folder_name, file_name):
-        ds_browser = self._session._call_method(
-            vim_util, "get_dynamic_property", ds_ref, "Datastore", "browser")
+        ds_browser = self._get_ds_browser(ds_ref)
         # Check if the folder exists or not. If not, create one
         # Check if the file exists or not.
-        folder_path = vm_util.build_datastore_path(ds_name, folder_name)
-        folder_exists, file_exists = self._path_file_exists(ds_browser,
-                                                            folder_path,
-                                                            file_name)
+        folder_path = ds_util.build_datastore_path(ds_name, folder_name)
+        folder_exists, file_exists = ds_util.file_exists(self._session,
+                ds_browser, folder_path, file_name)
         # Ensure that the cache folder exists
         if not folder_exists:
-            self._mkdir(vm_util.build_datastore_path(ds_name,
-                                                     self._base_folder),
-                        ds_ref)
+            dc_info = self.get_datacenter_ref_and_name(ds_ref)
+            ds_util.mkdir(self._session,
+                          ds_util.build_datastore_path(ds_name,
+                                                       self._base_folder),
+                          dc_info.ref)
 
         return file_exists
 

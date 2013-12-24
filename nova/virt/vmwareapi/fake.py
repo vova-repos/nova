@@ -742,7 +742,8 @@ class Task(ManagedObject):
         super(Task, self).__init__("Task")
         info = DataObject()
         info.name = task_name
-        info.state = state
+        if state:
+            info.state = state
         info.result = result
         self.set("info", info)
 
