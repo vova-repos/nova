@@ -24,6 +24,7 @@ import copy
 import os
 
 from oslo.config import cfg
+from oslo.vmware import exceptions as vexc
 
 from nova.api.metadata import base as instance_metadata
 from nova import compute
@@ -43,7 +44,6 @@ from nova.virt import configdrive
 from nova.virt import driver
 from nova.virt import imagehandler
 from nova.virt.vmwareapi import ds_util
-from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import imagecache
 from nova.virt.vmwareapi import vif as vmwarevif
 from nova.virt.vmwareapi import vim
@@ -145,7 +145,7 @@ class VMwareVMOps(object):
         return lst_vm_names
 
     def _extend_virtual_disk(self, instance, requested_size, name, dc_ref):
-        service_content = self._session._get_vim().get_service_content()
+        service_content = self._session._get_vim().service_content
         LOG.debug(_("Extending root virtual disk to %s"), requested_size)
         vmdk_extend_task = self._session._call_method(
                 self._session._get_vim(),
@@ -171,10 +171,10 @@ class VMwareVMOps(object):
     def _delete_datastore_file(self, instance, datastore_path, dc_ref):
         try:
             ds_util.file_delete(self._session, datastore_path, dc_ref)
-        except (error_util.CannotDeleteFileException,
-                error_util.FileFaultException,
-                error_util.FileLockedException,
-                error_util.FileNotFoundException) as e:
+        except (vexc.CannotDeleteFileException,
+                vexc.FileFaultException,
+                vexc.FileLockedException,
+                vexc.FileNotFoundException) as e:
             LOG.debug(_("Unable to delete %(ds)s. There may be more than "
                         "one process or thread that tries to delete the file. "
                         "Exception: %(ex)s"),
@@ -224,7 +224,7 @@ class VMwareVMOps(object):
         (file_type, is_iso) = self._get_disk_format(image_meta)
 
         client_factory = self._session._get_vim().client.factory
-        service_content = self._session._get_vim().get_service_content()
+        service_content = self._session._get_vim().service_content
         ds = vm_util.get_datastore_ref_and_name(self._session, self._cluster,
                  datastore_regex=self._datastore_regex)
         data_store_ref = ds[0]
@@ -392,7 +392,7 @@ class VMwareVMOps(object):
                 image_ds_path = (handler.fetch_image(
                     context, instance['image_ref'], image_meta,
                     upload_name,
-                    host=self._session._host_ip,
+                    host=self._session._host,
                     datacenter_name=dc_info.name,
                     datastore_name=data_store_name,
                     cookies=cookies,
@@ -550,7 +550,7 @@ class VMwareVMOps(object):
                 try:
                     ds_util.file_move(self._session, dc_info.ref,
                                       src_folder, dest_folder)
-                except error_util.FileAlreadyExistsException:
+                except vexc.FileAlreadyExistsException:
                     # File move has failed. This may be due to the fact that a
                     # process or thread has already completed the opertaion.
                     # In the event of a FileAlreadyExists we continue,
@@ -687,7 +687,7 @@ class VMwareVMOps(object):
                         upload_folder)
                     vmware_images.upload_iso_to_datastore(
                         tmp_file, instance,
-                        host=self._session._host_ip,
+                        host=self._session._host,
                         data_center_name=dc_name,
                         datastore_name=data_store_name,
                         cookies=cookies,
@@ -825,7 +825,7 @@ class VMwareVMOps(object):
         """
         vm_ref = vm_util.get_vm_ref(self._session, instance)
         client_factory = self._session._get_vim().client.factory
-        service_content = self._session._get_vim().get_service_content()
+        service_content = self._session._get_vim().service_content
 
         def _get_vm_and_vmdk_attribs():
             # Get the vmdk file name that the VM is pointing to
@@ -1624,7 +1624,7 @@ class VMwareVMOps(object):
         try:
             ds_util.mkdir(self._session, path, dc_info.ref)
             LOG.debug(_("Folder %s created."), path)
-        except error_util.FileAlreadyExistsException:
+        except vexc.FileAlreadyExistsException:
             # NOTE(hartsocks): if the folder already exists, that
             # just means the folder was prepped by another process.
             pass

@@ -17,8 +17,9 @@
 Stubouts for the test suite
 """
 
+from oslo.vmware import exceptions as vexc
+
 from nova.virt.vmwareapi import driver
-from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import fake
 from nova.virt.vmwareapi.imagehandler import download
 from nova.virt.vmwareapi import network_util
@@ -30,26 +31,32 @@ def fake_get_vim_object(arg):
     return fake.FakeVim()
 
 
+@property
+def fake_vim_prop(arg):
+    """Stubs out the VMwareAPISession's vim property access method."""
+    return fake.get_fake_vim_object(arg)
+
+
 def fake_is_vim_object(arg, module):
     """Stubs out the VMwareAPISession's is_vim_object method."""
     return isinstance(module, fake.FakeVim)
 
 
 def fake_temp_method_exception():
-    raise error_util.VimFaultException(
-            [error_util.NOT_AUTHENTICATED],
+    raise vexc.VimFaultException(
+            [vexc.NOT_AUTHENTICATED],
             "Session Empty/Not Authenticated")
 
 
 def fake_temp_session_exception():
-    raise error_util.SessionConnectionException("it's a fake!",
+    raise vexc.VimConnectionException("it's a fake!",
             "Session Exception")
 
 
 def fake_session_file_exception():
-    fault_list = [error_util.FILE_ALREADY_EXISTS]
-    raise error_util.VimFaultException(fault_list,
-                                       Exception('fake'))
+    fault_list = [vexc.FILE_ALREADY_EXISTS]
+    raise vexc.VimFaultException(fault_list,
+                                 Exception('fake'))
 
 
 def set_stubs(stubs):
@@ -60,7 +67,7 @@ def set_stubs(stubs):
               fake.fake_fetch_image)
     stubs.Set(vmware_images, 'get_vmdk_size_and_properties',
               fake.fake_get_vmdk_size_and_properties)
-    stubs.Set(driver.VMwareAPISession, "_get_vim_object",
-              fake_get_vim_object)
+    stubs.Set(driver.VMwareAPISession, "vim",
+              fake_vim_prop)
     stubs.Set(driver.VMwareAPISession, "_is_vim_object",
               fake_is_vim_object)

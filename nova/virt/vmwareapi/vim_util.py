@@ -18,6 +18,7 @@ The VMware API utility module.
 """
 
 from oslo.config import cfg
+from oslo.vmware import vim_util as vutil
 
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
@@ -148,7 +149,7 @@ def get_object_properties(vim, collector, mobj, type, properties):
         return None
     usecoll = collector
     if usecoll is None:
-        usecoll = vim.get_service_content().propertyCollector
+        usecoll = vim.service_content.propertyCollector
     property_filter_spec = client_factory.create('ns0:PropertyFilterSpec')
     property_spec = client_factory.create('ns0:PropertySpec')
     property_spec.all = (properties is None or len(properties) == 0)
@@ -195,24 +196,8 @@ def get_dynamic_properties(vim, mobj, type, property_names):
 
 def get_objects(vim, type, properties_to_collect=None, all=False):
     """Gets the list of objects of the type specified."""
-    if not properties_to_collect:
-        properties_to_collect = ["name"]
-
-    client_factory = vim.client.factory
-    object_spec = build_object_spec(client_factory,
-                        vim.get_service_content().rootFolder,
-                        [build_recursive_traversal_spec(client_factory)])
-    property_spec = build_property_spec(client_factory, type=type,
-                                properties_to_collect=properties_to_collect,
-                                all_properties=all)
-    property_filter_spec = build_property_filter_spec(client_factory,
-                                [property_spec],
-                                [object_spec])
-    options = client_factory.create('ns0:RetrieveOptions')
-    options.maxObjects = CONF.vmware.maximum_objects
-    return vim.RetrievePropertiesEx(
-            vim.get_service_content().propertyCollector,
-            specSet=[property_filter_spec], options=options)
+    return vutil.get_objects(vim, type, CONF.vmware.maximum_objects,
+                             properties_to_collect, all)
 
 
 def get_inner_objects(vim, base_obj, path, inner_type,
@@ -231,21 +216,21 @@ def get_inner_objects(vim, base_obj, path, inner_type,
     options = client_factory.create('ns0:RetrieveOptions')
     options.maxObjects = CONF.vmware.maximum_objects
     return vim.RetrievePropertiesEx(
-            vim.get_service_content().propertyCollector,
+            vim.service_content.propertyCollector,
             specSet=[property_filter_spec], options=options)
 
 
 def cancel_retrieve(vim, token):
     """Cancels the retrieve operation."""
     return vim.CancelRetrievePropertiesEx(
-            vim.get_service_content().propertyCollector,
+            vim.service_content.propertyCollector,
             token=token)
 
 
 def continue_to_get_objects(vim, token):
     """Continues to get the list of objects of the type specified."""
     return vim.ContinueRetrievePropertiesEx(
-            vim.get_service_content().propertyCollector,
+            vim.service_content.propertyCollector,
             token=token)
 
 
@@ -292,10 +277,10 @@ def get_properties_for_a_collection_of_objects(vim, type,
     options = client_factory.create('ns0:RetrieveOptions')
     options.maxObjects = CONF.vmware.maximum_objects
     return vim.RetrievePropertiesEx(
-            vim.get_service_content().propertyCollector,
+            vim.service_content.propertyCollector,
             specSet=[prop_filter_spec], options=options)
 
 
 def get_about_info(vim):
     """Get the About Info from the service content."""
-    return vim.get_service_content().about
+    return vim.service_content.about

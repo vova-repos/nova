@@ -22,13 +22,14 @@ A fake VMware VI API implementation.
 import collections
 import pprint
 
+from oslo.vmware import exceptions as vexc
+
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import units
 from nova.openstack.common import uuidutils
-from nova.virt.vmwareapi import error_util
 
 _CLASSES = ['Datacenter', 'Datastore', 'ResourcePool', 'VirtualMachine',
             'Network', 'HostSystem', 'HostNetworkSystem', 'Task', 'session',
@@ -37,6 +38,7 @@ _CLASSES = ['Datacenter', 'Datastore', 'ResourcePool', 'VirtualMachine',
 _FAKE_FILE_SIZE = 1024
 
 _db_content = {}
+_vim_map = {}
 
 LOG = logging.getLogger(__name__)
 
@@ -278,7 +280,7 @@ class FileAlreadyExists(DataObject):
 
     def __init__(self):
         super(FileAlreadyExists, self).__init__()
-        self.__name__ = error_util.FILE_ALREADY_EXISTS
+        self.__name__ = vexc.FILE_ALREADY_EXISTS
 
 
 class FileNotFound(DataObject):
@@ -286,7 +288,7 @@ class FileNotFound(DataObject):
 
     def __init__(self):
         super(FileNotFound, self).__init__()
-        self.__name__ = error_util.FILE_NOT_FOUND
+        self.__name__ = vexc.FILE_NOT_FOUND
 
 
 class FileFault(DataObject):
@@ -294,7 +296,7 @@ class FileFault(DataObject):
 
     def __init__(self):
         super(FileFault, self).__init__()
-        self.__name__ = error_util.FILE_FAULT
+        self.__name__ = vexc.FILE_FAULT
 
 
 class CannotDeleteFile(DataObject):
@@ -302,7 +304,7 @@ class CannotDeleteFile(DataObject):
 
     def __init__(self):
         super(CannotDeleteFile, self).__init__()
-        self.__name__ = error_util.CANNOT_DELETE_FILE
+        self.__name__ = vexc.CANNOT_DELETE_FILE
 
 
 class FileLocked(DataObject):
@@ -310,7 +312,7 @@ class FileLocked(DataObject):
 
     def __init__(self):
         super(FileLocked, self).__init__()
-        self.__name__ = error_util.FILE_LOCKED
+        self.__name__ = vexc.FILE_LOCKED
 
 
 class VirtualDisk(DataObject):
@@ -964,6 +966,13 @@ class FakeFactory(object):
         return DataObject(obj_name)
 
 
+def get_fake_vim_object(vmware_api_session):
+    key = vmware_api_session.__repr__()
+    if key not in _vim_map:
+        _vim_map[key] = FakeVim()
+    return _vim_map[key]
+
+
 class FakeVim(object):
     """Fake VIM Class."""
 
@@ -997,7 +1006,8 @@ class FakeVim(object):
 
         self._service_content = service_content
 
-    def get_service_content(self):
+    @property
+    def service_content(self):
         return self._service_content
 
     def __repr__(self):
@@ -1037,8 +1047,8 @@ class FakeVim(object):
         if (self._session is None or self._session not in
                  _db_content['session']):
             LOG.debug(_("Session is faulty"))
-            raise error_util.VimFaultException(
-                               [error_util.NOT_AUTHENTICATED],
+            raise vexc.VimFaultException(
+                               [vexc.NOT_AUTHENTICATED],
                                _("Session Invalid"))
 
     def _session_is_active(self, *args, **kwargs):
@@ -1210,7 +1220,7 @@ class FakeVim(object):
         if _db_content.get("files", None) is None:
             raise exception.NoFilesFound()
         if get_file(ds_path):
-            raise error_util.FileAlreadyExistsException()
+            raise vexc.FileAlreadyExistsException()
         _db_content["files"].append('%s/' % ds_path)
 
     def _set_power_state(self, method, vm_ref, pwr_state="poweredOn"):

@@ -83,7 +83,7 @@ class DownloadImageHandler(base.ImageHandler):
                       image_id)
             return False
         instance_id = kwargs.get("instance_id")
-        service_content = session._get_vim().get_service_content()
+        service_content = session._get_vim().service_content
 
         dc_moref = session._call_method(session._get_vim(),
                                         'FindByInventoryPath',
@@ -126,7 +126,7 @@ class DownloadImageHandler(base.ImageHandler):
                         "datacenter path"), image_id)
             return False
         instance_id = kwargs.get("instance_id")
-        service_content = session._get_vim().get_service_content()
+        service_content = session._get_vim().service_content
         src_dc_moref = session._call_method(session._get_vim(),
                                             'FindByInventoryPath',
                                             service_content.searchIndex,

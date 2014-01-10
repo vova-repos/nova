@@ -14,10 +14,10 @@
 
 import contextlib
 import mock
+from oslo.vmware import exceptions as vexc
 
 from nova import test
 from nova.virt.vmwareapi import ds_util
-from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import fake
 
 
@@ -41,7 +41,7 @@ class fake_session(object):
             error_info = 'fake error'
             error = task_info.error
             name = error.fault.__class__.__name__
-            raise error_util.get_fault_class(name)(error_info)
+            raise vexc.get_fault_class(name)(error_info)
 
 
 class DsUtilTestCase(test.NoDBTestCase):

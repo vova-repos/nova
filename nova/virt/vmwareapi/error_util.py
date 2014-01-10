@@ -16,67 +16,28 @@
 """
 Exception classes and SOAP response error checking module.
 """
-from nova import exception
+from oslo.vmware import exceptions as vexc
 
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
-ALREADY_EXISTS = 'AlreadyExists'
-CANNOT_DELETE_FILE = 'CannotDeleteFile'
-FILE_ALREADY_EXISTS = 'FileAlreadyExists'
-FILE_FAULT = 'FileFault'
-FILE_LOCKED = 'FileLocked'
-FILE_NOT_FOUND = 'FileNotFound'
-INVALID_PROPERTY = 'InvalidProperty'
-NOT_AUTHENTICATED = 'NotAuthenticated'
+# Most VMware-specific exception classes are now centrally defined in
+# oslo.vmware.
+# Note(vui):
+# - map back to NovaException?
+# - 1c6898efecd7d78855efcb22d9c38d6127339000 should be ported oslo.vmware
 
 
-class VimException(Exception):
-    """The VIM Exception class."""
-
-    def __init__(self, exception_summary, excep):
-        Exception.__init__(self)
-        if isinstance(exception_summary, list):
-            # we need this to protect against developers using
-            # this method like VimFaultException
-            raise ValueError("exception_summary must not be a list")
-
-        self.exception_summary = str(exception_summary)
-        self.exception_obj = excep
-
-    def __str__(self):
-        return self.exception_summary + ": " + str(self.exception_obj)
+class VMwareDriverConfigurationException(vexc.VMwareDriverException):
+    """Base class for all configuration exceptions.
+    """
+    msg_fmt = _("VMware Driver configuration fault.")
 
 
-class SessionOverLoadException(VimException):
-    """Session Overload Exception."""
-    pass
-
-
-class SessionConnectionException(VimException):
-    """Session Connection Exception."""
-    pass
-
-
-class VimAttributeError(VimException):
-    """VI Attribute Error."""
-    pass
-
-
-class VimFaultException(Exception):
-    """The VIM Fault exception class."""
-
-    def __init__(self, fault_list, excep):
-        Exception.__init__(self)
-        if not isinstance(fault_list, list):
-            raise ValueError("fault_list must be a list")
-        self.fault_list = fault_list
-        self.exception_obj = excep
-
-    def __str__(self):
-        return str(self.exception_obj)
+class UseLinkedCloneConfigurationFault(VMwareDriverConfigurationException):
+    msg_fmt = _("No default value for use_linked_clone found.")
 
 
 class FaultCheckers(object):
@@ -99,7 +60,7 @@ class FaultCheckers(object):
             # not the case with a timed out idle session. It is as bad as a
             # terminated session for we cannot use the session. So setting
             # fault to NotAuthenticated fault.
-            fault_list = [NOT_AUTHENTICATED]
+            fault_list = [vexc.NOT_AUTHENTICATED]
         else:
             for obj_cont in resp_obj.objects:
                 if hasattr(obj_cont, "missingSet"):
@@ -110,92 +71,6 @@ class FaultCheckers(object):
                         fault_list.append(fault_type.__name__)
         if fault_list:
             exc_msg_list = ', '.join(fault_list)
-            raise VimFaultException(fault_list, Exception(_("Error(s) %s "
+            raise vexc.VimFaultException(fault_list, Exception(_("Error(s) %s "
                     "occurred in the call to RetrievePropertiesEx") %
                     exc_msg_list))
-
-
-class VMwareDriverException(exception.NovaException):
-    """Base class for all exceptions raised by the VMware Driver.
-
-    All exceptions raised by the VMwareAPI drivers should raise
-    an exception descended from this class as a root. This will
-    allow the driver to potentially trap problems related to its
-    own internal configuration before halting the nova-compute
-    node.
-    """
-    msg_fmt = _("VMware Driver fault.")
-
-
-class VMwareDriverConfigurationException(VMwareDriverException):
-    """Base class for all configuration exceptions.
-    """
-    msg_fmt = _("VMware Driver configuration fault.")
-
-
-class UseLinkedCloneConfigurationFault(VMwareDriverConfigurationException):
-    msg_fmt = _("No default value for use_linked_clone found.")
-
-
-class AlreadyExistsException(VMwareDriverException):
-    msg_fmt = _("Resource already exists.")
-    code = 409
-
-
-class CannotDeleteFileException(VMwareDriverException):
-    msg_fmt = _("Cannot delete file.")
-    code = 403
-
-
-class FileAlreadyExistsException(VMwareDriverException):
-    msg_fmt = _("File already exists.")
-    code = 409
-
-
-class FileFaultException(VMwareDriverException):
-    msg_fmt = _("File fault.")
-    code = 409
-
-
-class FileLockedException(VMwareDriverException):
-    msg_fmt = _("File locked.")
-    code = 403
-
-
-class FileNotFoundException(VMwareDriverException):
-    msg_fmt = _("File not found.")
-    code = 404
-
-
-class InvalidPropertyException(VMwareDriverException):
-    msg_fmt = _("Invalid property.")
-    code = 400
-
-
-class NotAuthenticatedException(VMwareDriverException):
-    msg_fmt = _("Not Authenticated.")
-    code = 403
-
-
-# Populate the fault registry with the exceptions that have
-# special treatment.
-_fault_classes_registry = {
-    ALREADY_EXISTS: AlreadyExistsException,
-    CANNOT_DELETE_FILE: CannotDeleteFileException,
-    FILE_ALREADY_EXISTS: FileAlreadyExistsException,
-    FILE_FAULT: FileFaultException,
-    FILE_LOCKED: FileLockedException,
-    FILE_NOT_FOUND: FileNotFoundException,
-    INVALID_PROPERTY: InvalidPropertyException,
-    NOT_AUTHENTICATED: NotAuthenticatedException,
-}
-
-
-def get_fault_class(name):
-    """Get a named subclass of VMwareDriverException."""
-    name = str(name)
-    fault_class = _fault_classes_registry.get(name)
-    if not fault_class:
-        LOG.warning(_('Fault %s not matched.'), name)
-        fault_class = VMwareDriverException
-    return fault_class

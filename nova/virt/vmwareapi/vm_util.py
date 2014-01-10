@@ -808,7 +808,7 @@ def _get_vm_ref_from_vm_uuid(session, instance_uuid):
     vm_refs = session._call_method(
         session._get_vim(),
         "FindAllByUuid",
-        session._get_vim().get_service_content().searchIndex,
+        session._get_vim().service_content.searchIndex,
         uuid=instance_uuid,
         vmSearch=True,
         instanceUuid=True)

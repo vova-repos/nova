@@ -12,6 +12,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.vmware import exceptions as vexc
+
 from nova import test
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import fake
@@ -30,10 +32,10 @@ class ErrorUtilTestCase(test.NoDBTestCase):
         # perform additional checks on the exception raised, instead of
         # try/catch block in the below tests, but it's available
         # only from  Py 2.7.
-        exp_fault_list = [error_util.NOT_AUTHENTICATED]
+        exp_fault_list = [vexc.NOT_AUTHENTICATED]
         try:
             error_util.FaultCheckers.retrievepropertiesex_fault_checker(None)
-        except error_util.VimFaultException as e:
+        except vexc.VimFaultException as e:
             self.assertEqual(exp_fault_list, e.fault_list)
         else:
             self.fail("VimFaultException was not raised.")
@@ -47,7 +49,7 @@ class ErrorUtilTestCase(test.NoDBTestCase):
         try:
             error_util.FaultCheckers.retrievepropertiesex_fault_checker(
                 fake_objects)
-        except error_util.VimFaultException as e:
+        except vexc.VimFaultException as e:
             self.assertEqual(exp_fault_list, e.fault_list)
         else:
             self.fail("VimFaultException was not raised.")
@@ -58,26 +60,3 @@ class ErrorUtilTestCase(test.NoDBTestCase):
         self.assertIsNone(
             error_util.FaultCheckers.retrievepropertiesex_fault_checker(
                 fake_objects))
-
-    def test_exception_summary_exception_as_list(self):
-        # assert that if a list is fed to the VimException object
-        # that it will error.
-        self.assertRaises(ValueError,
-                          error_util.VimException,
-                          [], ValueError('foo'))
-
-    def test_exception_summary_string(self):
-        e = error_util.VimException("string", ValueError("foo"))
-        string = str(e)
-        self.assertEqual("string: foo", string)
-
-    def test_vim_fault_exception_string(self):
-        self.assertRaises(ValueError,
-                          error_util.VimFaultException,
-                          "bad", ValueError("argument"))
-
-    def test_vim_fault_exception(self):
-        vfe = error_util.VimFaultException([ValueError("example")],
-                                           ValueError("cause"))
-        string = str(vfe)
-        self.assertEqual("cause", string)

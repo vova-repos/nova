@@ -20,27 +20,23 @@ A connection to the VMware ESX/vCenter platform.
 """
 
 import re
-import time
 
-from eventlet import event
 from oslo.config import cfg
+from oslo.vmware import api
+from oslo.vmware import vim
 import suds
 
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import loopingcall
 from nova.openstack.common import uuidutils
 from nova.virt import driver
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import host
-from nova.virt.vmwareapi import vim
-from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmops
 from nova.virt.vmwareapi import volumeops
-
 
 LOG = logging.getLogger(__name__)
 
@@ -151,8 +147,8 @@ class VMwareESXDriver(driver.ComputeDriver):
     def cleanup_host(self, host):
         # NOTE(hartsocks): we lean on the init_host to force the vim object
         # to not be None.
-        vim = self._session.vim
-        service_content = vim.get_service_content()
+        vim = self._session._get_vim()
+        service_content = vim.service_content
         session_manager = service_content.sessionManager
         try:
             vim.client.service.Logout(session_manager)
@@ -731,177 +727,47 @@ class VMwareVCDriver(VMwareESXDriver):
             _vmops.manage_image_cache(context, instances)
 
 
-class VMwareAPISession(object):
+class VMwareAPISession(api.VMwareAPISession):
     """Sets up a session with the VC/ESX host and handles all
     the calls made to the host.
     """
-
     def __init__(self, host_ip=CONF.vmware.host_ip,
                  username=CONF.vmware.host_username,
                  password=CONF.vmware.host_password,
                  retry_count=CONF.vmware.api_retry_count,
                  scheme="https"):
-        self._host_ip = host_ip
-        self._host_username = username
-        self._host_password = password
-        self._api_retry_count = retry_count
-        self._scheme = scheme
-        self._session = None
-        self.vim = None
-        self._create_session()
+        super(VMwareAPISession, self).__init__(
+                host=host_ip,
+                server_username=username,
+                server_password=password,
+                api_retry_count=retry_count,
+                task_poll_interval=CONF.vmware.task_poll_interval,
+                scheme=scheme,
+                create_session=True,
+                wsdl_loc=CONF.vmware.wsdl_location
+                )
 
     def _get_vim_object(self):
         """Create the VIM Object instance."""
-        return vim.Vim(protocol=self._scheme, host=self._host_ip)
-
-    def _create_session(self):
-        """Creates a session with the VC/ESX host."""
-
-        delay = 1
-
-        while True:
-            try:
-                # Login and setup the session with the host for making
-                # API calls
-                self.vim = self._get_vim_object()
-                session = self.vim.Login(
-                               self.vim.get_service_content().sessionManager,
-                               userName=self._host_username,
-                               password=self._host_password)
-                # Terminate the earlier session, if possible ( For the sake of
-                # preserving sessions as there is a limit to the number of
-                # sessions we can have )
-                if self._session:
-                    try:
-                        self.vim.TerminateSession(
-                                self.vim.get_service_content().sessionManager,
-                                sessionId=[self._session.key])
-                    except Exception as excep:
-                        # This exception is something we can live with. It is
-                        # just an extra caution on our side. The session may
-                        # have been cleared. We could have made a call to
-                        # SessionIsActive, but that is an overhead because we
-                        # anyway would have to call TerminateSession.
-                        LOG.debug(excep)
-                self._session = session
-                return
-            except Exception as excep:
-                LOG.critical(_("Unable to connect to server at %(server)s, "
-                    "sleeping for %(seconds)s seconds"),
-                    {'server': self._host_ip, 'seconds': delay},
-                    exc_info=True)
-                # exc_info logs the exception with the message
-                time.sleep(delay)
-                delay = min(2 * delay, 60)
+        return self.vim
 
     def _is_vim_object(self, module):
         """Check if the module is a VIM Object instance."""
         return isinstance(module, vim.Vim)
 
     def _session_is_active(self):
-        active = False
-        try:
-            active = self.vim.SessionIsActive(
-                    self.vim.get_service_content().sessionManager,
-                    sessionID=self._session.key,
-                    userName=self._session.userName)
-        except Exception as e:
-            LOG.warning(_("Unable to validate session %s!"),
-                        self._session.key)
-            LOG.debug(_("Exception: %(ex)s"), {'ex': e})
-        return active
+        return self._is_current_session_active()
 
     def _call_method(self, module, method, *args, **kwargs):
         """Calls a method within the module specified with
         args provided.
         """
-        args = list(args)
-        retry_count = 0
-        while True:
-            exc = None
-            try:
-                if not self._is_vim_object(module):
-                    # If it is not the first try, then get the latest
-                    # vim object
-                    if retry_count > 0:
-                        args = args[1:]
-                    args = [self.vim] + args
-                retry_count += 1
-                temp_module = module
-
-                for method_elem in method.split("."):
-                    temp_module = getattr(temp_module, method_elem)
-
-                return temp_module(*args, **kwargs)
-            except error_util.VimFaultException as excep:
-                # If it is a Session Fault Exception, it may point
-                # to a session gone bad. So we try re-creating a session
-                # and then proceeding ahead with the call.
-                exc = excep
-                if error_util.NOT_AUTHENTICATED in excep.fault_list:
-                    # Because of the idle session returning an empty
-                    # RetrievePropertiesResponse and also the same is returned
-                    # when there is say empty answer to the query for
-                    # VMs on the host ( as in no VMs on the host), we have no
-                    # way to differentiate. We thus check if the session is
-                    # active
-                    if self._session_is_active():
-                        return []
-                    LOG.warning(_("Session %s is inactive!"),
-                                self._session.key)
-                    self._create_session()
-                else:
-                    # No re-trying for errors for API call has gone through
-                    # and is the caller's fault. Caller should handle these
-                    # errors. e.g, InvalidArgument fault.
-                    # Raise specific exceptions here if possible
-                    if excep.fault_list:
-                        raise error_util.get_fault_class(excep.fault_list[0])
-                    break
-            except error_util.SessionOverLoadException as excep:
-                # For exceptions which may come because of session overload,
-                # we retry
-                exc = excep
-            except error_util.SessionConnectionException as excep:
-                # For exceptions with connections we create the session
-                exc = excep
-                self._create_session()
-            except Exception as excep:
-                # If it is a proper exception, say not having furnished
-                # proper data in the SOAP call or the retry limit having
-                # exceeded, we raise the exception
-                exc = excep
-                break
-
-            LOG.debug(_("_call_method(session=%(key)s) failed. "
-                        "Module: %(module)s. "
-                        "Method: %(method)s. "
-                        "args: %(args)s. "
-                        "kwargs: %(kwargs)s. "
-                        "Iteration: %(n)s. "
-                        "Exception: %(ex)s. "),
-                      {'key': self._session.key,
-                       'module': module,
-                       'method': method,
-                       'args': args,
-                       'kwargs': kwargs,
-                       'n': retry_count,
-                       'ex': exc})
-
-            # If retry count has been reached then break and
-            # raise the exception
-            if retry_count > self._api_retry_count:
-                break
-            time.sleep(TIME_BETWEEN_API_CALL_RETRIES)
-
-        LOG.critical(_("In vmwareapi: _call_method (session=%s)"),
-                     self._session.key, exc_info=True)
-        raise
+        if not self._is_vim_object(module):
+            return self.invoke_api(module, method, self.vim, *args, **kwargs)
+        else:
+            return self.invoke_api(module, method, *args, **kwargs)
 
     def _get_vim(self):
-        """Gets the VIM object reference."""
-        if self.vim is None:
-            self._create_session()
         return self.vim
 
     def _stop_loop(self, loop):
@@ -911,44 +777,4 @@ class VMwareAPISession(object):
         """Return a Deferred that will give the result of the given task.
         The task is polled until it completes.
         """
-        done = event.Event()
-        loop = loopingcall.FixedIntervalLoopingCall(self._poll_task,
-                                                    task_ref, done)
-        loop.start(CONF.vmware.task_poll_interval)
-        try:
-            ret_val = done.wait()
-        except Exception:
-            raise
-        finally:
-            self._stop_loop(loop)
-        return ret_val
-
-    def _poll_task(self, task_ref, done):
-        """Poll the given task, and fires the given Deferred if we
-        get a result.
-        """
-        try:
-            task_info = self._call_method(vim_util, "get_dynamic_property",
-                            task_ref, "Task", "info")
-            task_name = task_info.name
-            if task_info.state in ['queued', 'running']:
-                return
-            elif task_info.state == 'success':
-                LOG.debug(_("Task [%(task_name)s] %(task_ref)s "
-                            "status: success"),
-                          {'task_name': task_name, 'task_ref': task_ref})
-                done.send(task_info)
-            else:
-                error_info = str(task_info.error.localizedMessage)
-                LOG.warn(_("Task [%(task_name)s] %(task_ref)s "
-                          "status: error %(error_info)s"),
-                         {'task_name': task_name, 'task_ref': task_ref,
-                          'error_info': error_info})
-                # Check if we can raise a specific exception
-                error = task_info.error
-                name = error.fault.__class__.__name__
-                task_ex = error_util.get_fault_class(name)(error_info)
-                done.send_exception(task_ex)
-        except Exception as excep:
-            LOG.warn(_("In vmwareapi:_poll_task, Got this error %s") % excep)
-            done.send_exception(excep)
+        return self.wait_for_task(task_ref)
