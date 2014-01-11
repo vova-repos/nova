@@ -941,6 +941,15 @@ def fake_upload_image(context, image, instance, **kwargs):
     pass
 
 
+def fake_download_flat_image(context, timeout_secs, image_service, image_id,
+                             **kwargs):
+    """Fakes fetch flat image. Just adds a reference to the db for the file."""
+    ds_name = kwargs.get("datastore_name")
+    file_path = kwargs.get("file_path")
+    ds_file_path = "[" + ds_name + "] " + file_path
+    _add_file(ds_file_path)
+
+
 def fake_get_vmdk_size_and_properties(context, image_id, instance):
     """Fakes the file size and properties fetch for the image file."""
     props = {"vmware_ostype": "otherGuest",

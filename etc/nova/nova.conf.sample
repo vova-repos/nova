@@ -3399,6 +3399,9 @@
 # Name of Integration Bridge (string value)
 #integration_bridge=br-int
 
+# Timeout in seconds for image transfers (integer value)
+#image_transfer_timeout_secs=7200
+
 
 [xenserver]
 

@@ -52,10 +52,13 @@ from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmware_images
 
 
-vmware_vif_opts = [
+vmware_vmops_opts = [
     cfg.StrOpt('integration_bridge',
                default='br-int',
                help='Name of Integration Bridge'),
+    cfg.IntOpt('image_transfer_timeout_secs',
+                default=7200,
+                help='Timeout in seconds for image transfers'),
     ]
 
 vmware_group = cfg.OptGroup(name='vmware',
@@ -63,7 +66,7 @@ vmware_group = cfg.OptGroup(name='vmware',
 
 CONF = cfg.CONF
 CONF.register_group(vmware_group)
-CONF.register_opts(vmware_vif_opts, vmware_group)
+CONF.register_opts(vmware_vmops_opts, vmware_group)
 CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
 CONF.import_opt('remove_unused_base_images', 'nova.virt.imagecache')
 CONF.import_opt('vnc_enabled', 'nova.vnc')
@@ -189,6 +192,39 @@ class VMwareVMOps(object):
         if disk_format not in ['iso', 'vmdk']:
             raise exception.InvalidDiskFormat(disk_format=disk_format)
         return (disk_format, disk_format == 'iso')
+
+    def fetch_image_on_datastore(self, context, instance,
+            image_meta, upload_location, cookies,
+            disk_type, image_size_kb,
+            data_store_name, data_center_name):
+        """Fetch image from Glance to datastore."""
+        LOG.debug(_("Fetching image file data %(image_ref)s to the "
+                    "data store %(data_store_name)s") %
+                    {'image_ref': instance['image_ref'],
+                     'data_store_name': data_store_name},
+                  instance=instance)
+        for handler, loc, image_meta in imagehandler.handle_image(
+                context, instance['image_ref']):
+            image_ds_path = (handler.fetch_image(
+                context, instance['image_ref'], image_meta,
+                upload_location,
+                host=self._session._host,
+                datacenter_name=data_center_name,
+                datastore_name=data_store_name,
+                cookies=cookies,
+                location=loc,
+                session=self._session,
+                dst_folder=upload_location,  # unused?
+                instance_id=instance['uuid']))
+
+        LOG.debug(_("Fetched image file data %(image_ref)s to "
+                    "%(upload_location)s on the data store "
+                    "%(data_store_name)s") %
+                    {'image_ref': instance['image_ref'],
+                     'upload_location': upload_location,
+                     'data_store_name': data_store_name},
+                  instance=instance)
+        return image_ds_path
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info, block_device_info=None,
@@ -380,36 +416,6 @@ class VMwareVMOps(object):
                          "data_store_name": data_store_name},
                       instance=instance)
 
-        def _fetch_image_on_datastore(upload_name):
-            """Fetch image from Glance to datastore."""
-            LOG.debug(_("Fetching image file data %(image_ref)s to the "
-                        "data store %(data_store_name)s") %
-                        {'image_ref': instance['image_ref'],
-                         'data_store_name': data_store_name},
-                      instance=instance)
-            for handler, loc, image_meta in imagehandler.handle_image(
-                    context, instance['image_ref']):
-                image_ds_path = (handler.fetch_image(
-                    context, instance['image_ref'], image_meta,
-                    upload_name,
-                    host=self._session._host,
-                    datacenter_name=dc_info.name,
-                    datastore_name=data_store_name,
-                    cookies=cookies,
-                    location=loc,
-                    session=self._session,
-                    dst_folder=tmp_upload_folder,
-                    instance_id=instance['uuid']))
-
-            LOG.debug(_("Fetched image file data %(image_ref)s to "
-                        "%(upload_name)s on the data store "
-                        "%(data_store_name)s") %
-                        {'image_ref': instance['image_ref'],
-                         'upload_name': upload_name,
-                         'data_store_name': data_store_name},
-                      instance=instance)
-            return image_ds_path
-
         def _copy_virtual_disk(source, dest):
             """Copy a sparse virtual disk to a thin virtual disk."""
             # Copy a sparse virtual disk to a thin virtual disk. This is also
@@ -533,7 +539,10 @@ class VMwareVMOps(object):
                     else:
                         upload_file_name = sparse_uploaded_vmdk_name
 
-                _fetch_image_on_datastore(upload_file_name)
+                self.fetch_image_on_datastore(context, instance,
+                        image_meta, upload_file_name, cookies,
+                        disk_type, vmdk_file_size_in_kb,
+                        data_store_name, dc_info.name)
 
                 if not is_iso and disk_type == "sparse":
                     # Copy the sparse virtual disk to a thin virtual disk.

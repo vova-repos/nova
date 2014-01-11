@@ -30,6 +30,7 @@ import mox
 from oslo.config import cfg
 from oslo.vmware import api
 from oslo.vmware import exceptions as vexc
+from oslo.vmware import image_transfer
 from oslo.vmware import vim
 import suds
 
@@ -240,6 +241,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.project_id = 'fake'
         self.node_name = 'test_url'
         self.ds = 'ds1'
+        self.dc = 'dc1'
         self.context = context.RequestContext(self.user_id, self.project_id)
 
         @contextlib.contextmanager
@@ -262,7 +264,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             'disk_format': 'vmdk',
             'size': 512,
         }
-        nova.tests.image.fake.stub_out_image_service(self.stubs)
+        image_fake = nova.tests.image.fake
+        self.image_service = image_fake.stub_out_image_service(self.stubs)
         self.vnc_host = 'test_url'
 
     def tearDown(self):
@@ -800,6 +803,27 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             self._check_vm_info(info, power_state.RUNNING)
             self.assertTrue(self.exception)
 
+    def test_spawn_with_download_flat_image(self):
+        uuid = "fake-tmp-uuid"
+        with mock.patch.object(uuidutils, 'generate_uuid',
+                               return_value=uuid):
+            with mock.patch.object(image_transfer, 'download_flat_image') as m:
+                self._create_vm()
+                file_path = "%s/%s/%s/%s-flat.vmdk" % (
+                    "vmware_temp", uuid, "fake_image_uuid", "fake_image_uuid")
+                m.assert_called_once_with(
+                     self.context,
+                     cfg.CONF.vmware.image_transfer_timeout_secs,
+                     self.image_service,
+                     "fake_image_uuid",
+                     image_size=1024,
+                     data_center_name=self.dc,
+                     datastore_name=self.ds,
+                     host="test_url",
+                     cookies="Fake-CookieJar",
+                     file_path=file_path
+                    )
+
     def _spawn_attach_volume_vmdk(self, set_image_ref=True, vc_support=False):
         self._create_instance(set_image_ref=set_image_ref)
         self.mox.StubOutWithMock(block_device, 'volume_in_mapping')
@@ -1163,6 +1187,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                            fake_create_config_drive)
 
         self._create_vm()
+
         info = self.conn.get_info({'name': 1, 'uuid': self.uuid,
                                    'node': self.instance_node})
         self.stubs.Set(self.conn._volumeops, "attach_disk_to_vm",
@@ -1720,8 +1745,10 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase):
         self.node_name2 = self.conn._resources.keys()[1]
         if cluster_name2 in self.node_name2:
             self.ds = 'ds1'
+            self.dc = 'dc1'
         else:
             self.ds = 'ds2'
+            self.dc = 'dc2'
         self.vnc_host = 'ha-host'
 
     def tearDown(self):

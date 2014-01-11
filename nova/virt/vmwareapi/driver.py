@@ -120,7 +120,8 @@ class VMwareESXDriver(driver.ComputeDriver):
                     _("Invalid Regular Expression %s")
                     % CONF.vmware.datastore_regex)
 
-        self._session = VMwareAPISession(scheme=scheme)
+        self._session = VMwareAPISession(host_ip=self._host_ip,
+                                         scheme=scheme)
         self._volumeops = volumeops.VMwareVolumeOps(self._session)
         self._vmops = vmops.VMwareVMOps(self._session, self.virtapi,
                                         self._volumeops,
