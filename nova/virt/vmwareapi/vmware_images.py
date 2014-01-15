@@ -115,28 +115,6 @@ def upload_iso_to_datastore(iso_path, instance, **kwargs):
               instance=instance)
 
 
-def fetch_image(context, image, instance, **kwargs):
-    """Download image from the glance image server."""
-    LOG.debug(_("Downloading image %s from glance image server") % image,
-              instance=instance)
-    (image_service, image_id) = glance.get_remote_image_service(context, image)
-    metadata = image_service.show(context, image_id)
-    file_size = int(metadata['size'])
-    read_iter = image_service.download(context, image_id)
-    read_file_handle = read_write_util.GlanceFileRead(read_iter)
-    write_file_handle = read_write_util.VMwareHTTPWriteFile(
-                                kwargs.get("host"),
-                                kwargs.get("data_center_name"),
-                                kwargs.get("datastore_name"),
-                                kwargs.get("cookies"),
-                                kwargs.get("file_path"),
-                                file_size)
-    start_transfer(context, read_file_handle, file_size,
-                   write_file_handle=write_file_handle)
-    LOG.debug(_("Downloaded image %s from glance image server") % image,
-              instance=instance)
-
-
 def upload_image(context, image, instance, **kwargs):
     """Upload the snapshotted vm disk file to Glance image server."""
     LOG.debug(_("Uploading image %s to the Glance image server") % image,

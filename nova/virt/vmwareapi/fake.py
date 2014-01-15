@@ -838,12 +838,12 @@ def get_file(file_path):
     return file_path in _db_content.get("files")
 
 
-def fake_fetch_image(context, image, instance, **kwargs):
+def fake_fetch_image(*args, **kwargs):
     """Fakes fetch image call. Just adds a reference to the db for the file."""
     ds_name = kwargs.get("datastore_name")
-    file_path = kwargs.get("file_path")
-    ds_file_path = "[" + ds_name + "] " + file_path
+    ds_file_path = "[" + ds_name + "] " + args[4]
     _add_file(ds_file_path)
+    return True
 
 
 def fake_upload_image(context, image, instance, **kwargs):
@@ -901,6 +901,7 @@ class FakeVim(object):
         service_content.fileManager = "FileManager"
         service_content.rootFolder = "RootFolder"
         service_content.sessionManager = "SessionManager"
+        service_content.searchIndex = "SearchIndex"
 
         about_info = DataObject()
         about_info.name = "VMware vCenter Server"
