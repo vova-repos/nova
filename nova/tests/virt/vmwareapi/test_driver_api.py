@@ -37,6 +37,7 @@ from nova import context
 from nova import db
 from nova import exception
 from nova.openstack.common import jsonutils
+from nova.openstack.common import lockutils
 from nova.openstack.common import uuidutils
 from nova import test
 import nova.tests.image.fake
@@ -57,6 +58,8 @@ from nova.virt.vmwareapi import vmops
 from nova.virt.vmwareapi import vmware_images
 from nova.virt.vmwareapi import volume_util
 from nova.virt.vmwareapi import volumeops
+
+FAKE_IMAGE_UUID = '70a599e0-31e7-49b7-b260-868f441e862b'
 
 
 class fake_vm_ref(object):
@@ -252,6 +255,12 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.ds = 'ds1'
         self.context = context.RequestContext(self.user_id, self.project_id)
         db_fakes.stub_out_db_instance_api(self.stubs)
+
+        @contextlib.contextmanager
+        def fake_lockutils_lock(*args, **kwargs):
+            yield
+
+        self.stubs.Set(lockutils, 'lock', fake_lockutils_lock)
         stubs.set_stubs(self.stubs)
         vmwareapi_fake.reset()
         self.conn = driver.VMwareESXDriver(fake.FakeVirtAPI)
@@ -305,7 +314,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                   'root_gb': 80,
                   }
         if set_image_ref:
-            values['image_ref'] = "fake_image_uuid"
+            values['image_ref'] = FAKE_IMAGE_UUID
         self.instance_node = node
         self.uuid = uuid
         self.instance = db.instance_create(None, values)
@@ -405,8 +414,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         self._create_vm()
         inst_file_path = '[%s] %s/fake_name.vmdk' % (self.ds, self.uuid)
-        cache = ('[%s] vmware_base/fake_image_uuid/fake_image_uuid.vmdk' %
-                 self.ds)
+        cache = ('[%s] vmware_base/%s/%s.vmdk' %
+                 (self.ds, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID))
         self.assertTrue(vmwareapi_fake.get_file(inst_file_path))
         self.assertTrue(vmwareapi_fake.get_file(cache))
 
@@ -414,10 +423,10 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         """Test image disk is cached when use_linked_clone is True."""
         self.flags(use_linked_clone=True, group='vmware')
         self._create_vm()
-        file = ('[%s] vmware_base/fake_image_uuid/fake_image_uuid.vmdk' %
-                self.ds)
-        root = ('[%s] vmware_base/fake_image_uuid/fake_image_uuid.80.vmdk' %
-                self.ds)
+        file = ('[%s] vmware_base/%s/%s.vmdk' %
+                (self.ds, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID))
+        root = ('[%s] vmware_base/%s/%s.80.vmdk' %
+                (self.ds, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID))
         self.assertTrue(vmwareapi_fake.get_file(file))
         self.assertTrue(vmwareapi_fake.get_file(root))
 
@@ -461,7 +470,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.wait_task = self.conn._session._wait_for_task
         self.call_method = self.conn._session._call_method
         self.task_ref = None
-        id = 'fake_image_uuid'
+        id = FAKE_IMAGE_UUID
         cached_image = '[%s] vmware_base/%s/%s.80.vmdk' % (self.ds,
                                                            id, id)
         tmp_file = '[%s] vmware_base/%s/%s.80-flat.vmdk' % (self.ds,

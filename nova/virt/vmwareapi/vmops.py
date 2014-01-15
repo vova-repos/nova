@@ -43,6 +43,7 @@ from nova import unit
 from nova import utils
 from nova.virt import configdrive
 from nova.virt import driver
+from nova.virt import imagehandler
 from nova.virt.vmwareapi import vif as vmwarevif
 from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vim_util
@@ -390,17 +391,17 @@ class VMwareVMOps(object):
             # we just created above
             # For sparse disk, upload the -sparse.vmdk file to be copied into
             # a flat vmdk
-            upload_vmdk_name = sparse_uploaded_vmdk_name \
-                if disk_type == "sparse" else flat_uploaded_vmdk_name
-            vmware_images.fetch_image(
-                context,
-                instance['image_ref'],
-                instance,
-                host=self._session._host_ip,
-                data_center_name=dc_info.name,
-                datastore_name=data_store_name,
-                cookies=cookies,
-                file_path=upload_vmdk_name)
+            upload_vmdk_name = (sparse_uploaded_vmdk_name
+                                if disk_type == "sparse"
+                                else flat_uploaded_vmdk_name)
+            for handler, loc, image_meta in imagehandler.handle_image(
+                    context, instance['image_ref']):
+                handler.fetch_image(context, instance['image_ref'], image_meta,
+                                    upload_vmdk_name,
+                                    host=self._session._host_ip,
+                                    data_center_name=dc_info.name,
+                                    datastore_name=data_store_name,
+                                    cookies=cookies)
             LOG.debug(_("Downloaded image file data %(image_ref)s to "
                         "%(upload_vmdk_name)s on the data store "
                         "%(data_store_name)s") %

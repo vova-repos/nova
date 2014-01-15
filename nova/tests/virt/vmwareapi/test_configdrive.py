@@ -15,11 +15,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import contextlib
 import copy
 import fixtures
 import mox
 
 from nova import context
+from nova.openstack.common import lockutils
 from nova import test
 import nova.tests.image.fake
 from nova.tests import utils
@@ -43,6 +45,12 @@ class ConfigDriveTestCase(test.NoDBTestCase):
                    use_linked_clone=False, group='vmware')
         self.flags(vnc_enabled=False)
         vmwareapi_fake.reset(vc=True)
+
+        @contextlib.contextmanager
+        def fake_lockutils_lock(*args, **kwargs):
+            yield
+
+        self.stubs.Set(lockutils, 'lock', fake_lockutils_lock)
         stubs.set_stubs(self.stubs)
         nova.tests.image.fake.stub_out_image_service(self.stubs)
         self.conn = driver.VMwareVCDriver(fake.FakeVirtAPI)
@@ -68,7 +76,8 @@ class ConfigDriveTestCase(test.NoDBTestCase):
                               'instance_type': 'm1.large',
                               'vcpus': 4,
                               'root_gb': 80,
-                              'image_ref': '1',
+                              'image_ref':
+                                  '70a599e0-31e7-49b7-b260-868f441e862b',
                               'host': 'fake_host',
                               'task_state':
                                   'scheduling',
