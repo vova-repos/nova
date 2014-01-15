@@ -20,6 +20,7 @@ Stubouts for the test suite
 from nova.virt.vmwareapi import driver
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import fake
+from nova.virt.vmwareapi.imagehandler import download
 from nova.virt.vmwareapi import network_util
 from nova.virt.vmwareapi import vmware_images
 
@@ -55,7 +56,8 @@ def set_stubs(stubs):
     """Set the stubs."""
     stubs.Set(network_util, 'get_network_with_the_name',
               fake.fake_get_network)
-    stubs.Set(vmware_images, 'fetch_image', fake.fake_fetch_image)
+    stubs.Set(download.DownloadImageHandler, '_fetch_image',
+              fake.fake_fetch_image)
     stubs.Set(vmware_images, 'get_vmdk_size_and_properties',
               fake.fake_get_vmdk_size_and_properties)
     stubs.Set(vmware_images, 'upload_image', fake.fake_upload_image)

@@ -41,6 +41,7 @@ from nova.openstack.common import uuidutils
 from nova import utils
 from nova.virt import configdrive
 from nova.virt import driver
+from nova.virt import imagehandler
 from nova.virt.vmwareapi import ds_util
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import imagecache
@@ -381,21 +382,20 @@ class VMwareVMOps(object):
 
         def _fetch_image_on_datastore(upload_name):
             """Fetch image from Glance to datastore."""
-            LOG.debug(_("Downloading image file data %(image_ref)s to the "
+            LOG.debug(_("Fetching image file data %(image_ref)s to the "
                         "data store %(data_store_name)s") %
                         {'image_ref': instance['image_ref'],
                          'data_store_name': data_store_name},
                       instance=instance)
-            vmware_images.fetch_image(
-                context,
-                instance['image_ref'],
-                instance,
-                host=self._session._host_ip,
-                data_center_name=dc_info.name,
-                datastore_name=data_store_name,
-                cookies=cookies,
-                file_path=upload_name)
-            LOG.debug(_("Downloaded image file data %(image_ref)s to "
+            for handler, loc, image_meta in imagehandler.handle_image(
+                    context, instance['image_ref']):
+                handler.fetch_image(context, instance['image_ref'], image_meta,
+                                    upload_name,
+                                    host=self._session._host_ip,
+                                    data_center_name=dc_info.name,
+                                    datastore_name=data_store_name,
+                                    cookies=cookies)
+            LOG.debug(_("Fetched image file data %(image_ref)s to "
                         "%(upload_name)s on the data store "
                         "%(data_store_name)s") %
                         {'image_ref': instance['image_ref'],
