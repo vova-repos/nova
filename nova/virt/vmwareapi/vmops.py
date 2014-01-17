@@ -389,12 +389,18 @@ class VMwareVMOps(object):
                       instance=instance)
             for handler, loc, image_meta in imagehandler.handle_image(
                     context, instance['image_ref']):
-                handler.fetch_image(context, instance['image_ref'], image_meta,
-                                    upload_name,
-                                    host=self._session._host_ip,
-                                    data_center_name=dc_info.name,
-                                    datastore_name=data_store_name,
-                                    cookies=cookies)
+                image_ds_path = (handler.fetch_image(
+                    context, instance['image_ref'], image_meta,
+                    upload_name,
+                    host=self._session._host_ip,
+                    datacenter_name=dc_info.name,
+                    datastore_name=data_store_name,
+                    cookies=cookies,
+                    location=loc,
+                    session=self._session,
+                    dst_folder=tmp_upload_folder,
+                    instance_id=instance['uuid']))
+
             LOG.debug(_("Fetched image file data %(image_ref)s to "
                         "%(upload_name)s on the data store "
                         "%(data_store_name)s") %
@@ -402,6 +408,7 @@ class VMwareVMOps(object):
                          'upload_name': upload_name,
                          'data_store_name': data_store_name},
                       instance=instance)
+            return image_ds_path
 
         def _copy_virtual_disk(source, dest):
             """Copy a sparse virtual disk to a thin virtual disk."""
@@ -487,6 +494,8 @@ class VMwareVMOps(object):
                                                uuidutils.generate_uuid())
                 upload_folder = '%s/%s' % (tmp_upload_folder, upload_name)
 
+                ds_util.mkdir(self._session, ds_util.build_datastore_path(
+                    data_store_name, upload_folder), dc_info.ref)
                 # Naming the VM files in correspondence with the VM instance
                 # The flat vmdk file name
                 flat_uploaded_vmdk_name = "%s/%s-flat.vmdk" % (

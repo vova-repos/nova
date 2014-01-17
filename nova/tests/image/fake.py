@@ -227,12 +227,12 @@ class _FakeImageService(object):
 
     def get_location(self, context, image_id):
         if image_id in self.images:
-            return 'fake_location'
+            return {'url': 'fake_location'}
         return None
 
     def get_locations(self, context, image_id):
         if image_id in self.images:
-            return ['fake_location', 'fake_location2']
+            return [{'url': 'fake_location'}, {'url': 'fake_location2'}]
         return []
 
 
