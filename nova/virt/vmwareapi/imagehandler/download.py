@@ -56,7 +56,7 @@ class DownloadImageHandler(base.ImageHandler):
             read_file_handle = read_write_util.GlanceFileRead(read_iter)
             write_file_handle = read_write_util.VMwareHTTPWriteFile(
                 kwargs.get("host"),
-                kwargs.get("data_center_name"),
+                kwargs.get("datacenter_name"),
                 kwargs.get("datastore_name"),
                 kwargs.get("cookies"),
                 path,
