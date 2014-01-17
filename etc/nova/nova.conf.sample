@@ -2003,7 +2003,7 @@
 # handling images. The first extension in the list which can
 # handle the image with a suitable location will be used.
 # (list value)
-#image_handlers=vmware_download_handler,download
+#image_handlers=vmware_copy_handler,vmware_download_handler,download
 
 
 #

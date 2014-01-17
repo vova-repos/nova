@@ -31,7 +31,8 @@ LOG = logging.getLogger(__name__)
 
 image_opts = [
     cfg.ListOpt('image_handlers',
-                default=['vmware_download_handler', 'download'],
+                default=['vmware_download_handler',
+                         'download'],
                 help='Specifies which image handler extension names to use '
                      'for handling images. The first extension in the list '
                      'which can handle the image with a suitable location '

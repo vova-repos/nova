@@ -364,33 +364,43 @@ class VMwareVMOps(object):
 
         def _fetch_image_on_datastore():
             """Fetch image from Glance to datastore."""
-            LOG.debug(_("Downloading image file data %(image_ref)s to the "
+            LOG.debug(_("Fetching image file data %(image_ref)s to the "
                         "data store %(data_store_name)s") %
-                        {'image_ref': instance['image_ref'],
-                         'data_store_name': data_store_name},
+                      {'image_ref': instance['image_ref'],
+                       'data_store_name': data_store_name},
                       instance=instance)
             # For flat disk, upload the -flat.vmdk file whose meta-data file
             # we just created above
             # For sparse disk, upload the -sparse.vmdk file to be copied into
             # a flat vmdk
-            upload_vmdk_name = (sparse_uploaded_vmdk_name
-                                if disk_type == "sparse"
-                                else flat_uploaded_vmdk_name)
             for handler, loc, image_meta in imagehandler.handle_image(
                     context, instance['image_ref']):
-                handler.fetch_image(context, instance['image_ref'], image_meta,
-                                    upload_vmdk_name,
-                                    host=self._session._host_ip,
-                                    data_center_name=dc_info.name,
-                                    datastore_name=data_store_name,
-                                    cookies=cookies)
-            LOG.debug(_("Downloaded image file data %(image_ref)s to "
+                image_path = (
+                    handler.fetch_image(context, instance['image_ref'],
+                                        image_meta,
+                                        vmdk_path,
+                                        location=loc,
+                                        host=self._session._host_ip,
+                                        datacenter_name=dc_info.name,
+                                        datastore_name=data_store_name,
+                                        cookies=cookies,
+                                        session=self._session,
+                                        cache_folder=self._base_folder,
+                                        cached_fname=cached_fname,
+                                        disk_type=disk_type,
+                                        vmdk_file_size_in_kb=
+                                        vmdk_file_size_in_kb,
+                                        adapter_type=adapter_type,
+                                        thin_copy=True))
+
+            LOG.debug(_("Fetched image file data %(image_ref)s to "
                         "%(upload_vmdk_name)s on the data store "
                         "%(data_store_name)s") %
                         {'image_ref': instance['image_ref'],
-                         'upload_vmdk_name': upload_vmdk_name,
+                         'upload_vmdk_name': vmdk_path,
                          'data_store_name': data_store_name},
                       instance=instance)
+            return image_path
 
         def _copy_virtual_disk(source, dest):
             """Copy a sparse virtual disk to a thin virtual disk."""
@@ -438,11 +448,6 @@ class VMwareVMOps(object):
             upload_name = instance['image_ref']
             upload_folder = '%s/%s' % (self._base_folder, upload_name)
 
-            # The vmdk meta-data file
-            uploaded_vmdk_name = "%s/%s.vmdk" % (upload_folder, upload_name)
-            uploaded_vmdk_path = ds_util.build_datastore_path(data_store_name,
-                                                uploaded_vmdk_name)
-
             session_vim = self._session._get_vim()
             cookies = session_vim.client.options.transport.cookiejar
 
@@ -451,67 +456,59 @@ class VMwareVMOps(object):
             if not (self._check_if_folder_file_exists(ds_browser,
                                         data_store_ref, data_store_name,
                                         upload_folder, upload_name + ".vmdk")):
-                # Upload will be done to the self._tmp_folder and then moved
-                # to the self._base_folder
+
                 tmp_upload_folder = '%s/%s' % (self._tmp_folder,
                                                uuidutils.generate_uuid())
-                upload_folder = '%s/%s' % (tmp_upload_folder, upload_name)
+                tmp_upload_folder = '%s/%s' % (tmp_upload_folder, upload_name)
 
                 # Naming the VM files in correspondence with the VM instance
                 # The flat vmdk file name
-                flat_uploaded_vmdk_name = "%s/%s-flat.vmdk" % (
-                                            upload_folder, upload_name)
-                # The sparse vmdk file name for sparse disk image
-                sparse_uploaded_vmdk_name = "%s/%s-sparse.vmdk" % (
-                                            upload_folder, upload_name)
+                disk_type_fname = "sparse" if disk_type == "sparse" else "flat"
+                vmdk_path = "%s/%s-%s.vmdk" % (tmp_upload_folder, upload_name,
+                                               disk_type_fname)
+                cached_fname = "%s-%s.vmdk" % (upload_name, disk_type_fname)
 
-                flat_uploaded_vmdk_path = ds_util.build_datastore_path(
-                                                    data_store_name,
-                                                    flat_uploaded_vmdk_name)
-                sparse_uploaded_vmdk_path = ds_util.build_datastore_path(
-                                                    data_store_name,
-                                                    sparse_uploaded_vmdk_name)
+                vmdk_ds_path = vm_util.build_datastore_path(
+                    data_store_name, vmdk_path)
 
-                vmdk_name = "%s/%s.vmdk" % (upload_folder, upload_name)
-                vmdk_path = ds_util.build_datastore_path(data_store_name,
-                                                         vmdk_name)
-                if disk_type != "sparse":
-                   # Create a flat virtual disk and retain the metadata file.
-                    _create_virtual_disk(upload_folder, vmdk_path)
-                    ds_util.file_delete(self._session,
-                                        instance,
-                                        flat_uploaded_vmdk_path,
-                                        dc_info.ref)
+                descriptor_path = "%s/%s.vmdk" % (tmp_upload_folder,
+                                                  upload_name)
+                descriptor_ds_path = vm_util.build_datastore_path(
+                    data_store_name, descriptor_path)
 
-                _fetch_image_on_datastore()
+                cached_ds_path = _fetch_image_on_datastore()
+                if cached_ds_path is not None and type(cached_ds_path) is str:
+                    # The image is ready to be consumed.
+                    vmdk_ds_path = cached_ds_path
+                    descriptor_ds_path = ('%s.vmdk' % vmdk_ds_path[:-10])
 
                 if disk_type == "sparse":
                     # Copy the sparse virtual disk to a thin virtual disk.
                     disk_type = "thin"
-                    _copy_virtual_disk(sparse_uploaded_vmdk_path, vmdk_path)
-                    ds_util.file_delete(self._session,
-                                        instance,
-                                        sparse_uploaded_vmdk_path,
-                                        dc_info.ref)
-                ds_browser = self._get_ds_browser(data_store_ref)
-                base_folder = '%s/%s' % (self._base_folder, upload_name)
-                dest_folder = ds_util.build_datastore_path(data_store_name,
-                                                           base_folder)
-                if not ds_util.path_exists(self._session, ds_browser,
-                                           dest_folder):
-                    src_folder = ds_util.build_datastore_path(data_store_name,
-                                                              upload_folder)
-                    ds_util.move_folder(self._session, instance, dc_info.ref,
-                                        src_folder, dest_folder)
-                ds_util.file_delete(self._session, instance,
-                        ds_util.build_datastore_path(data_store_name,
-                                                     tmp_upload_folder),
-                        dc_info.ref)
+                    _copy_virtual_disk(vmdk_ds_path,
+                                       descriptor_ds_path)
+                    self._delete_datastore_file(instance, vmdk_ds_path,
+                                                dc_info.ref)
+
+                if (cached_ds_path is not None and
+                            type(cached_ds_path) is not str):
+                    # The fetch operation did copy the image to the temp dir.
+                    # It needs to move to the cache dir.
+                    base_folder = '%s/%s' % (self._base_folder, upload_name)
+                    _move_image_to_cache_folder(tmp_upload_folder, base_folder)
+                    # self._delete_datastore_file(instance,
+                    #                             vm_util.build_datastore_path(
+                    #                                 data_store_name,
+                    #                                 tmp_upload_folder),
+                    #                             dc_info.ref)
+                    descriptor_path = "%s/%s.vmdk" % (
+                        base_folder, upload_name)
+                    descriptor_ds_path = vm_util.build_datastore_path(
+                        data_store_name, descriptor_path)
             else:
                 # linked clone base disk exists
                 if disk_type == "sparse":
                     disk_type = "thin"
-
             # Extend the disk size if necessary
             if not linked_clone:
                 # If we are not using linked_clone, copy the image from
@@ -523,7 +520,7 @@ class VMwareVMOps(object):
                                                  dest_name)
                 dest_vmdk_path = ds_util.build_datastore_path(
                     data_store_name, dest_vmdk_name)
-                _copy_virtual_disk(uploaded_vmdk_path, dest_vmdk_path)
+                _copy_virtual_disk(vmdk_ds_path, dest_vmdk_path)
 
                 root_vmdk_path = dest_vmdk_path
                 if root_gb_in_kb > vmdk_file_size_in_kb:
@@ -546,7 +543,7 @@ class VMwareVMOps(object):
                         self._session._get_vim(),
                         "CopyVirtualDisk_Task",
                         service_content.virtualDiskManager,
-                        sourceName=uploaded_vmdk_path,
+                        sourceName=descriptor_ds_path,
                         sourceDatacenter=dc_info.ref,
                         destName=root_vmdk_path,
                         destSpec=copy_spec)

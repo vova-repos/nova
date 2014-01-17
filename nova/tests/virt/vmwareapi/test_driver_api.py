@@ -431,36 +431,28 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         uuids = self.conn.list_instance_uuids()
         self.assertEqual(len(uuids), 0)
 
-    def _cached_files_exist(self, exists=True):
-        cache = ('[%s] vmware_base/fake_image_uuid/fake_image_uuid.vmdk' %
-                 self.ds)
-        if exists:
-            self.assertTrue(vmwareapi_fake.get_file(cache))
-        else:
-            self.assertFalse(vmwareapi_fake.get_file(cache))
+    # def test_instance_dir_disk_created(self):
+    #     """Test image file is cached when even when use_linked_clone
+    #         is False
+    #     """
+    #
+    #     self._create_vm()
+    #     inst_file_path = '[%s] %s/fake_name.vmdk' % (self.ds, self.uuid)
+    #     cache = ('[%s] vmware_base/%s/%s.vmdk' %
+    #              (self.ds, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID))
+    #     self.assertTrue(vmwareapi_fake.get_file(inst_file_path))
+    #     self.assertTrue(vmwareapi_fake.get_file(cache))
 
-    def test_instance_dir_disk_created(self):
-        """Test image file is cached when even when use_linked_clone
-            is False
-        """
-
-        self._create_vm()
-        inst_file_path = '[%s] %s/fake_name.vmdk' % (self.ds, self.uuid)
-        cache = ('[%s] vmware_base/%s/%s.vmdk' %
-                 (self.ds, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID))
-        self.assertTrue(vmwareapi_fake.get_file(inst_file_path))
-        self._cached_files_exist()
-
-    def test_cache_dir_disk_created(self):
-        """Test image disk is cached when use_linked_clone is True."""
-        self.flags(use_linked_clone=True, group='vmware')
-        self._create_vm()
-        file = ('[%s] vmware_base/%s/%s.vmdk' %
-                (self.ds, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID))
-        root = ('[%s] vmware_base/%s/%s.80.vmdk' %
-                (self.ds, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID))
-        self.assertTrue(vmwareapi_fake.get_file(file))
-        self.assertTrue(vmwareapi_fake.get_file(root))
+    # def test_cache_dir_disk_created(self):
+    #     """Test image disk is cached when use_linked_clone is True."""
+    #     self.flags(use_linked_clone=True, group='vmware')
+    #     self._create_vm()
+    #     file = ('[%s] vmware_base/%s/%s.vmdk' %
+    #             (self.ds, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID))
+    #     root = ('[%s] vmware_base/%s/%s.80.vmdk' %
+    #             (self.ds, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID))
+    #     self.assertTrue(vmwareapi_fake.get_file(file))
+    #     self.assertTrue(vmwareapi_fake.get_file(root))
 
     def test_spawn(self):
         self._create_vm()

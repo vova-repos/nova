@@ -12,11 +12,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import contextlib
+
 import mock
 import stevedore
 
 from nova import context
 from nova import exception
+from nova.openstack.common import lockutils
 from nova import test
 from nova.tests.image import fake as fake_image
 from nova.virt import imagehandler
@@ -24,10 +27,17 @@ from nova.virt.imagehandler import download as download_imagehandler
 
 
 class ImageHandlerTestCase(test.TestCase):
+
     def setUp(self):
         super(ImageHandlerTestCase, self).setUp()
         self.fake_driver = mock.MagicMock()
         self.context = context.get_admin_context()
+
+        @contextlib.contextmanager
+        def fake_lockutils_lock(*args, **kwargs):
+            yield
+
+        self.stubs.Set(lockutils, 'lock', fake_lockutils_lock)
         self.image_service = fake_image.stub_out_image_service(self.stubs)
         imagehandler._IMAGE_HANDLERS = []
         imagehandler._IMAGE_HANDLERS_ASSO = {}
@@ -195,9 +205,10 @@ class ImageHandlerTestCase(test.TestCase):
 
     def test_handle_image_without_associated_handle(self):
         image_id = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
-        expected_locations = ['fake_location', 'fake_location2']
+        expected_locations = [{'url': 'fake_location'},
+                              {'url': 'fake_location2'}]
         # Image will be handled successful on second location.
-        expected_handled_location = 'fake_location2'
+        expected_handled_location = {'url': 'fake_location2'}
         expected_handled_path = 'fake/image/path2'
         self._handle_image_without_associated_handle(image_id,
                                                      expected_locations,
@@ -211,8 +222,9 @@ class ImageHandlerTestCase(test.TestCase):
             self.get_locations_called = True
 
         image_id = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
-        expected_locations = ['fake_location', 'fake_location2']
-        expected_handled_location = 'fake_location'
+        expected_locations = [{'url': 'fake_location'},
+                              {'url': 'fake_location2'}]
+        expected_handled_location = {'url': 'fake_location'}
         expected_handled_path = 'fake/image/path'
 
         # 1) Handle image without cached association information
@@ -240,8 +252,9 @@ class ImageHandlerTestCase(test.TestCase):
             return original_get_locations(*args, **kwargs)
 
         image_id = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
-        expected_locations = ['fake_location', 'fake_location2']
-        expected_handled_location = 'fake_location'
+        expected_locations = [{'url': 'fake_location'},
+                              {'url': 'fake_location2'}]
+        expected_handled_location = {'url': 'fake_location'}
         expected_handled_path = 'fake/image/path'
 
         # 1) Handle image without cached association information
@@ -265,8 +278,9 @@ class ImageHandlerTestCase(test.TestCase):
 
     def test_handle_image_no_handler_available(self):
         image_id = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
-        expected_locations = ['fake_location', 'fake_location2']
-        expected_handled_location = 'fake_location3'
+        expected_locations = [{'url': 'fake_location'},
+                              {'url': 'fake_location2'}]
+        expected_handled_location = {'url': 'fake_location3'}
         expected_handled_path = 'fake/image/path'
 
         self.assertRaises(exception.NoImageHandlerAvailable,
