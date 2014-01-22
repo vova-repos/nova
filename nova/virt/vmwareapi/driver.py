@@ -27,7 +27,9 @@ from oslo.vmware import pbm
 from oslo.vmware import vim
 import suds
 
+from nova import context as nova_context
 from nova import exception
+from nova.objects import flavor as flavor_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -637,12 +639,31 @@ class VMwareVCDriver(VMwareESXDriver):
             stats_list.append(self.get_available_resource(node))
         return stats_list
 
+    def _get_storage_policy(self, instance):
+        """Returns the storage policy for the instance.
+
+        The storage policy will be defined on the flavor extra_specs. If
+        if this is not present the the default policy will be returned.
+        """
+        if CONF.vmware.pbm_default_policy:
+            flavor = flavor_obj.Flavor.get_by_id(
+                nova_context.get_admin_context(read_deleted='yes'),
+                instance['instance_type_id'])
+            storage_policy = CONF.vmware.pbm_default_policy
+            extra_specs = flavor.get('extra_specs')
+            if extra_specs:
+                storage_policy = extra_specs.get('vmware:storage_policy',
+                        CONF.vmware.pbm_default_policy)
+            return storage_policy
+
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
         """Create VM instance."""
+        storage_policy = self._get_storage_policy(instance)
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.spawn(context, instance, image_meta, injected_files,
-              admin_password, network_info, block_device_info)
+              admin_password, network_info, block_device_info,
+              storage_policy=storage_policy)
 
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       disk_bus=None, device_type=None, encryption=None):

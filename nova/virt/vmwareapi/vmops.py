@@ -302,7 +302,7 @@ class VMwareVMOps(object):
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info, block_device_info=None,
-              instance_name=None, power_on=True):
+              instance_name=None, power_on=True, storage_policy=None):
         """Creates a VM instance.
 
         Steps followed are:
@@ -379,6 +379,8 @@ class VMwareVMOps(object):
         service_content = self._session._get_vim().service_content
 
         allowed_ds_types = VMwareVMOps.get_allowed_datastore_types(disk_type)
+        #TODO(garyk): select the datatstore according to the storage policy (if
+        # defined)
         ds = vm_util.get_datastore_ref_and_name(self._session, self._cluster,
                  datastore_regex=self._datastore_regex,
                  allowed_ds_types=allowed_ds_types)

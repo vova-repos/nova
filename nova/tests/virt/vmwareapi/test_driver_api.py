@@ -40,6 +40,7 @@ from nova.compute import api as compute_api
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import context
+from nova import db
 from nova import exception
 from nova.openstack.common import jsonutils
 from nova.openstack.common import lockutils
@@ -1814,7 +1815,7 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase):
         self.flags(vnc_enabled=False,
                    image_cache_subdirectory_name='vmware_base')
         vmwareapi_fake.reset(vc=True)
-        self.conn = driver.VMwareVCDriver(None, False)
+        self.conn = driver.VMwareVCDriver(fake.FakeVirtAPI, False)
         self.set_exception_vars()
         self.node_name = self.conn._resources.keys()[0]
         self.node_name2 = self.conn._resources.keys()[1]
@@ -1836,6 +1837,49 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase):
         vcdriver = driver.VMwareVCDriver(None, False)
         vcdriver._session = mock.Mock()
         return vcdriver
+
+    def _get_fake_flavor(self):
+        fake_flavor = {
+            'created_at': None,
+            'updated_at': None,
+            'deleted_at': None,
+            'deleted': 0,
+            'id': 1,
+            'name': 'm1.foo',
+            'memory_mb': 1024,
+            'vcpus': 4,
+            'root_gb': 20,
+            'ephemeral_gb': 0,
+            'flavorid': 'm1.foo',
+            'swap': 0,
+            'rxtx_factor': 1.0,
+            'vcpu_weight': 1,
+            'disabled': False,
+            'is_public': True,
+            'extra_specs': {'fake': 'extra_spec'},
+        }
+        return fake_flavor
+
+    @mock.patch.object(db, 'flavor_get')
+    def test_get_storage_policy_none(self, mock_flavor_get):
+        mock_flavor_get.return_value = self._get_fake_flavor()
+        self.flags(pbm_wsdl_location='fake-location',
+                   pbm_default_policy='fake-policy', group='vmware')
+        self._create_instance()
+        policy = self.conn._get_storage_policy(self.instance)
+        self.assertEqual('fake-policy', policy)
+
+    @mock.patch.object(db, 'flavor_get')
+    def test_get_storage_policy_extra_specs(self, mock_flavor_get):
+        fake_flavor = self._get_fake_flavor()
+        fake_flavor.update(
+            {'extra_specs': {'vmware:storage_policy': 'flavor-policy'}})
+        mock_flavor_get.return_value = fake_flavor
+        self.flags(pbm_wsdl_location='fake-location',
+                   pbm_default_policy='fake-policy', group='vmware')
+        self._create_instance()
+        policy = self.conn._get_storage_policy(self.instance)
+        self.assertEqual('flavor-policy', policy)
 
     @mock.patch('nova.virt.vmwareapi.driver.VMwareVCDriver.__init__')
     def test_init_host_and_cleanup_host(self, mock_init):
