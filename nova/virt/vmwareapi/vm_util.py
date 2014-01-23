@@ -23,6 +23,7 @@ import copy
 import functools
 
 from oslo.config import cfg
+from oslo.vmware import pbm
 
 from nova import exception
 from nova.openstack.common.gettextutils import _
@@ -1088,6 +1089,7 @@ def propset_dict(propset):
 
 
 def _select_datastore(data_stores, best_match, datastore_regex=None,
+                      session=None, storage_policy=None,
                       allowed_ds_types=ALL_SUPPORTED_DS_TYPES):
     """Find the most preferable datastore in a given RetrieveResult object.
 
@@ -1097,9 +1099,18 @@ def _select_datastore(data_stores, best_match, datastore_regex=None,
     :param allowed_ds_types: a list of acceptable datastore type names
     :return: datastore_ref, datastore_name, capacity, freespace
     """
+    if storage_policy:
+        matching_ds = _select_datastores_matching_storage_policy(
+            session, data_stores, storage_policy)
+        # Datastore regex should not be enabled with policy
+        datastore_regex = None
+        if not matching_ds:
+            return
+    else:
+        matching_ds = data_stores
 
     # data_stores is actually a RetrieveResult object from vSphere API call
-    for obj_content in data_stores.objects:
+    for obj_content in matching_ds.objects:
         # the propset attribute "need not be set" by returning API
         if not hasattr(obj_content, 'propSet'):
             continue
@@ -1123,7 +1134,7 @@ def _select_datastore(data_stores, best_match, datastore_regex=None,
 
 
 def get_datastore_ref_and_name(session, cluster=None, host=None,
-                               datastore_regex=None,
+                               datastore_regex=None, storage_policy=None,
                                allowed_ds_types=ALL_SUPPORTED_DS_TYPES):
     """Get the datastore list and choose the most preferable one."""
     if cluster is None and host is None:
@@ -1155,9 +1166,9 @@ def get_datastore_ref_and_name(session, cluster=None, host=None,
     best_match = DSRecord(datastore=None, name=None, capacity=None,
                           freespace=None, type=None, accessible=False)
     while data_stores:
-        best_match = _select_datastore(data_stores, best_match,
-                                       datastore_regex,
-                                       allowed_ds_types)
+        best_match = _select_datastore(
+            data_stores, best_match, datastore_regex, session, storage_policy,
+            allowed_ds_types)
         token = _get_token(data_stores)
         if not token:
             break
@@ -1403,3 +1414,29 @@ def get_vmdk_adapter_type(adapter_type):
     else:
         vmdk_adapter_type = adapter_type
     return vmdk_adapter_type
+
+
+def _select_datastores_matching_storage_policy(session, data_stores,
+                                               storage_policy):
+    """Get datastores matching the given storage policy.
+
+    :param data_stores: the list of retrieve result wrapped datastore objects
+    :param storage_policy: the storage policy name
+    :return the list of datastores conforming to the given storage policy
+    """
+    pbm_client_factory = session.pbm.client.factory
+    profile_id = pbm.get_profile_id_by_name(session, storage_policy)
+    if profile_id:
+        ds_mors = [oc.obj for oc in data_stores.objects]
+        hubs = pbm.convert_datastores_to_hubs(pbm_client_factory, ds_mors)
+        matching_hubs = pbm.filter_hubs_by_profile(session, hubs,
+                                                   profile_id)
+        if matching_hubs:
+            matching_ds = pbm.filter_datastores_by_hubs(matching_hubs,
+                                                        ds_mors)
+            object_contents = [oc for oc in data_stores.objects
+                               if oc.obj in matching_ds]
+            data_stores.objects = object_contents
+            return data_stores
+    LOG.debug(_("Unable to retrieve storage policy with name %s"),
+              storage_policy)

@@ -14,8 +14,14 @@
 import collections
 import re
 
+import mock
+
+from oslo.vmware import pbm
+
 from nova.openstack.common import units
+
 from nova import test
+from nova.virt.vmwareapi import fake
 from nova.virt.vmwareapi import vm_util
 
 ResultSet = collections.namedtuple('ResultSet', ['objects'])
@@ -23,6 +29,15 @@ ResultSetToken = collections.namedtuple('ResultSet', ['objects', 'token'])
 ObjectContent = collections.namedtuple('ObjectContent', ['obj', 'propSet'])
 DynamicProperty = collections.namedtuple('Property', ['name', 'val'])
 MoRef = collections.namedtuple('ManagedObjectReference', ['value'])
+
+
+class fake_session(object):
+    def __init__(self, ret=None):
+        self.ret = ret
+        self.pbm = fake.FakeVim()
+
+    def _call_method(self, *args):
+        return self.ret
 
 
 class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
@@ -115,6 +130,7 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
         rec = vm_util._select_datastore(datastores,
                                         best_match,
                                         datastore_regex,
+                                        None, None,
                                         vm_util.NON_STREAMABLE_DS_TYPES)
 
         self.assertIsNotNone(rec, "could not find datastore!")
@@ -131,6 +147,7 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
         rec = vm_util._select_datastore(datastores,
                                         best_match,
                                         datastore_regex,
+                                        None, None,
                                         vm_util.ALL_SUPPORTED_DS_TYPES)
 
         self.assertIsNotNone(rec, "could not find datastore!")
@@ -192,3 +209,42 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
             datastore='ds-100', type=row[0], name=row[1], accessible=row[2],
             capacity=row[3], freespace=row[4])) for row in data]
         self.assertEqual([True, True, False, False], validated_recs)
+
+    @mock.patch.object(pbm, 'get_profile_id_by_name')
+    @mock.patch.object(pbm, 'filter_hubs_by_profile')
+    def test_datastores_matching_storage_policy(self, fake_matching_hubs,
+                                                fake_profile_id):
+        fake_profile_id.return_value = 'fake_profile_id'
+        datastores = fake.FakeRetrieveResult()
+        datastores.add_object(fake.Datastore("fake-ds0"))
+        datastores.add_object(fake.Datastore("fake-ds1"))
+        datastores.add_object(fake.Datastore("fake-ds2"))
+        datastores.add_object(fake.Datastore("fake-ds3"))
+
+        # Use only datastores ds2, ds3
+        expected_datastores = fake.FakeRetrieveResult()
+        expected_datastores.objects = datastores.objects[2:]
+        # Convert expected_datastores to hubs
+        ds_mors = [oc.obj for oc in expected_datastores.objects]
+        fake_hubs = pbm.convert_datastores_to_hubs(fake.FakeFactory(),
+                                                        ds_mors)
+        fake_matching_hubs.return_value = fake_hubs
+
+        # Only the datastores matching fake hubs should be returned
+        result = vm_util._select_datastores_matching_storage_policy(
+            fake_session(), datastores, 'fake_policy')
+        self.assertEqual(expected_datastores.objects, result.objects)
+
+    @mock.patch.object(pbm, 'get_profile_id_by_name')
+    @mock.patch.object(pbm, 'filter_hubs_by_profile', return_value=None)
+    def test_no_datastores_matching_storage_policy(self, fake_matching_hubs,
+                                                   fake_profile_id):
+        fake_profile_id.return_value = 'fake_profile_id'
+        datastores = fake.FakeRetrieveResult()
+        datastores.add_object(fake.Datastore("fake-ds0"))
+        datastores.add_object(fake.Datastore("fake-ds1"))
+
+        # Only the datastores matching fake hubs should be returned
+        result = vm_util._select_datastores_matching_storage_policy(
+            fake_session(), datastores, 'fake_policy')
+        self.assertIsNone(result)

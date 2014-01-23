@@ -379,11 +379,12 @@ class VMwareVMOps(object):
         service_content = self._session._get_vim().service_content
 
         allowed_ds_types = VMwareVMOps.get_allowed_datastore_types(disk_type)
-        #TODO(garyk): select the datatstore according to the storage policy (if
-        # defined)
-        ds = vm_util.get_datastore_ref_and_name(self._session, self._cluster,
-                 datastore_regex=self._datastore_regex,
-                 allowed_ds_types=allowed_ds_types)
+        ds = vm_util.get_datastore_ref_and_name(
+            self._session,
+            cluster=self._cluster,
+            datastore_regex=self._datastore_regex,
+            storage_policy=storage_policy,
+            allowed_ds_types=allowed_ds_types)
         data_store_ref = ds[0]
         data_store_name = ds[1]
         dc_info = self.get_datacenter_ref_and_name(data_store_ref)
