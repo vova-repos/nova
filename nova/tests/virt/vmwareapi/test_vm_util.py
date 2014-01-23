@@ -19,6 +19,8 @@ import re
 
 import mock
 
+from oslo.vmware import pbm
+
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import units
@@ -39,11 +41,7 @@ class fake_session(object):
         return self.ret[self.ind - 1]
 
     def _get_vim(self):
-        fake_vim = fake.DataObject()
-        client = fake.DataObject()
-        client.factory = 'fake_factory'
-        fake_vim.client = client
-        return fake_vim
+        return fake.FakeVim()
 
 
 class partialObject(object):
@@ -643,3 +641,31 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         expected = re.sub(r'\s+', '', expected)
         result = re.sub(r'\s+', '', repr(result))
         self.assertEqual(expected, result)
+
+    def test_vm_create_spec_with_profile_spec(self):
+        instance_uuid = uuidutils.generate_uuid()
+        fake_instance = {'id': 7, 'name': 'fake!',
+                         'uuid': instance_uuid,
+                         'vcpus': 2, 'memory_mb': 2048}
+        create_spec = vm_util.get_vm_create_spec(
+            fake.FakeFactory(), fake_instance, 'fake-name', 'fake-datastore',
+            [], profile_spec='fake_profile_spec')
+        self.assertEqual(create_spec.vmProfile, ['fake_profile_spec'])
+
+    @mock.patch.object(pbm, 'get_profile_id_by_name')
+    def test_get_storage_profile_spec(self, mock_get_profile_id_by_name):
+        fake_profile_id = fake.DataObject()
+        fake_profile_id.uniqueId = 'fake_unique_id'
+        mock_get_profile_id_by_name.return_value = fake_profile_id
+        profile_spec = vm_util.get_storage_profile_spec(fake_session(),
+                                                        'fake_policy')
+        self.assertEqual('ns0:VirtualMachineDefinedProfileSpec',
+                         profile_spec.obj_name)
+        self.assertEqual(fake_profile_id.uniqueId, profile_spec.profileId)
+
+    @mock.patch.object(pbm, 'get_profile_id_by_name')
+    def test_storage_spec_empty_profile(self, mock_get_profile_id_by_name):
+        mock_get_profile_id_by_name.return_value = None
+        profile_spec = vm_util.get_storage_profile_spec(fake_session(),
+                                                        'fake_policy')
+        self.assertIsNone(profile_spec)

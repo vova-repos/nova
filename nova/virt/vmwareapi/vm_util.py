@@ -95,7 +95,7 @@ NON_STREAMABLE_DS_TYPES = ['VMFS', 'NFS']
 
 
 def get_vm_create_spec(client_factory, instance, name, data_store_name,
-                       vif_infos, os_type="otherGuest"):
+                       vif_infos, os_type="otherGuest", profile_spec=None):
     """Builds the VM Create spec."""
     config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
     config_spec.name = name
@@ -108,6 +108,10 @@ def get_vm_create_spec(client_factory, instance, name, data_store_name,
     # Allow nested ESX instances to host 64 bit VMs.
     if os_type == "vmkernel5Guest":
         config_spec.nestedHVEnabled = "True"
+
+    # Append the profile spec
+    if profile_spec:
+        config_spec.vmProfile = [profile_spec]
 
     vm_file_info = client_factory.create('ns0:VirtualMachineFileInfo')
     vm_file_info.vmPathName = "[" + data_store_name + "]"
@@ -321,6 +325,17 @@ def get_vm_extra_config_spec(client_factory, extra_opts):
         extra_config.append(opt)
         config_spec.extraConfig = extra_config
     return config_spec
+
+
+def get_storage_profile_spec(session, storage_policy):
+    """Gets the vm profile spec configured for storage policy."""
+    profile_id = pbm.get_profile_id_by_name(session, storage_policy)
+    if profile_id:
+        client_factory = session._get_vim().client.factory
+        storage_profile_spec = client_factory.create(
+            'ns0:VirtualMachineDefinedProfileSpec')
+        storage_profile_spec.profileId = profile_id.uniqueId
+        return storage_profile_spec
 
 
 def get_vmdk_device_info(hardware_devices, uuid=None):

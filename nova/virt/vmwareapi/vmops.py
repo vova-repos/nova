@@ -425,10 +425,16 @@ class VMwareVMOps(object):
         # for example when the spawn of a rescue instance takes place.
         if not instance_name:
             instance_name = instance['uuid']
+        # Get the storage policy's profile spec
+        if storage_policy:
+            profile_spec = vm_util.get_storage_profile_spec(self._session,
+                                                            storage_policy)
+        else:
+            profile_spec = None
         # Get the create vm config spec
         config_spec = vm_util.get_vm_create_spec(
-                            client_factory, instance, instance_name,
-                            data_store_name, vif_infos, os_type)
+            client_factory, instance, instance_name, data_store_name,
+            vif_infos, os_type, profile_spec=profile_spec)
 
         def _execute_create_vm():
             """Create VM on ESX host."""
