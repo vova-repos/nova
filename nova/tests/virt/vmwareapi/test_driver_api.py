@@ -243,6 +243,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.node_name = 'test_url'
         self.ds = 'ds1'
         self.dc = 'dc1'
+        self.image_uuid = FAKE_IMAGE_UUID
         self.context = context.RequestContext(self.user_id, self.project_id)
 
         @contextlib.contextmanager
@@ -341,7 +342,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                   'swap': self.type_data['swap'],
         }
         if set_image_ref:
-            values['image_ref'] = FAKE_IMAGE_UUID
+            values['image_ref'] = self.image_uuid
         self.instance_node = node
         self.uuid = uuid
         self.instance = fake_instance.fake_instance_obj(
@@ -811,12 +812,12 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             with mock.patch.object(image_transfer, 'download_flat_image') as m:
                 self._create_vm()
                 file_path = "%s/%s/%s/%s-flat.vmdk" % (
-                    "vmware_temp", uuid, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID)
+                    "vmware_temp", uuid, self.image_uuid, self.image_uuid)
                 m.assert_called_once_with(
                      self.context,
                      cfg.CONF.vmware.image_transfer_timeout_secs,
                      self.image_service,
-                     FAKE_IMAGE_UUID,
+                     self.image_uuid,
                      image_size=FAKE_IMAGE_SIZE,
                      data_center_name=self.dc,
                      datastore_name=self.ds,
@@ -824,6 +825,50 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                      cookies="Fake-CookieJar",
                      file_path=file_path
                     )
+
+    def _spawn_disk_stream_optimized(self, use_linked_clone):
+        self.mox.StubOutWithMock(vmware_images, 'get_vmdk_size_and_properties')
+        result = [1024, {"vmware_ostype": "otherGuest",
+                         "vmware_adaptertype": "lsiLogic",
+                         "vmware_disktype": "streamOptimized",
+                         "vmware_linked_clone": use_linked_clone,
+                         }]
+        vmware_images.get_vmdk_size_and_properties(
+                mox.IgnoreArg(), mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn(result)
+
+        self.mox.ReplayAll()
+
+        uuid = "fake-tmp-uuid"
+        with mock.patch.object(uuidutils, 'generate_uuid',
+                               return_value=uuid):
+            self._create_vm()
+        info = self.conn.get_info({'uuid': self.uuid,
+                                   'node': self.instance_node})
+        self._check_vm_info(info, power_state.RUNNING)
+
+    def test_spawn_disk_stream_optimized_non_linked_clone(self):
+        self._spawn_disk_stream_optimized(use_linked_clone=False)
+        vm_name = self.image_uuid
+
+        cache_base_root_path = '[%s] vmware_base/%s/%s.vmdk' % (
+                self.ds, vm_name, vm_name)
+        cache_sized_root_path = '[%s] vmware_base/%s/%s.%s.vmdk' % (
+                self.ds, vm_name, self.image_uuid, "80")
+        self.assertTrue(vmwareapi_fake.get_file(cache_base_root_path))
+        self.assertFalse(vmwareapi_fake.get_file(cache_sized_root_path))
+
+    def test_spawn_disk_stream_optimized_linked_clone(self):
+        self._spawn_disk_stream_optimized(use_linked_clone=True)
+        vm_name = self.image_uuid
+
+        cache_base_root_path = '[%s] vmware_base/%s/%s.vmdk' % (
+                self.ds, vm_name, vm_name)
+        cache_sized_root_path = '[%s] vmware_base/%s/%s.%s.vmdk' % (
+                self.ds, vm_name, self.image_uuid, "80")
+
+        self.assertTrue(vmwareapi_fake.get_file(cache_base_root_path))
+        self.assertTrue(vmwareapi_fake.get_file(cache_sized_root_path))
 
     def _spawn_attach_volume_vmdk(self, set_image_ref=True, vc_support=False):
         self._create_instance(set_image_ref=set_image_ref)

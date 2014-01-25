@@ -67,7 +67,9 @@ def set_stubs(stubs):
               fake.fake_get_vmdk_size_and_properties)
     stubs.Set(driver.VMwareAPISession, "vim",
               fake_vim_prop)
-    stubs.Set(image_transfer, 'download_flat_image',
-              fake.fake_download_flat_image)
     stubs.Set(driver.VMwareAPISession, "_is_vim_object",
               fake_is_vim_object)
+    stubs.Set(image_transfer, 'download_flat_image',
+              fake.fake_download_flat_image)
+    stubs.Set(image_transfer, 'download_stream_optimized_image',
+              fake.fake_download_stream_optimized_image)

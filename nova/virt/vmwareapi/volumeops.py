@@ -39,6 +39,63 @@ class VMwareVolumeOps(object):
         self._cluster = cluster
         self._vc_support = vc_support
 
+    def _get_create_spec(self, name, size_kb, disk_type, ds_name):
+        """Return spec for creating a shadow VM for image disk.
+
+        The VM is never meant to be powered on. When used in importing
+        a disk it governs the directory name created for the VM
+        and the disk type of the disk image to convert to.
+
+        :param name: Name of the backing
+        :param size_kb: Size in KB of the backing
+        :param disk_type: VMDK type for the disk
+        :param ds_name: Datastore name where the disk is to be provisioned
+        :return: Spec for creation
+        """
+        cf = self._session.vim.client.factory
+        controller_device = cf.create('ns0:VirtualLsiLogicController')
+        controller_device.key = -100
+        controller_device.busNumber = 0
+        controller_device.sharedBus = 'noSharing'
+        controller_spec = cf.create('ns0:VirtualDeviceConfigSpec')
+        controller_spec.operation = 'add'
+        controller_spec.device = controller_device
+
+        disk_device = cf.create('ns0:VirtualDisk')
+        disk_device.capacityInKB = int(size_kb)
+        # for very small disks allocate at least 1KB
+        disk_device.capacityInKB = max(1, int(size_kb))
+        disk_device.key = -101
+        disk_device.unitNumber = 0
+        disk_device.controllerKey = -100
+        disk_device_bkng = cf.create('ns0:VirtualDiskFlatVer2BackingInfo')
+        if disk_type == 'eagerZeroedThick':
+            disk_device_bkng.eagerlyScrub = True
+        elif disk_type == 'thin':
+            disk_device_bkng.thinProvisioned = True
+        disk_device_bkng.fileName = '[%s]' % ds_name
+        disk_device_bkng.diskMode = 'persistent'
+        disk_device.backing = disk_device_bkng
+        disk_spec = cf.create('ns0:VirtualDeviceConfigSpec')
+        disk_spec.operation = 'add'
+        disk_spec.fileOperation = 'create'
+        disk_spec.device = disk_device
+
+        vm_file_info = cf.create('ns0:VirtualMachineFileInfo')
+        vm_file_info.vmPathName = '[%s]' % ds_name
+
+        create_spec = cf.create('ns0:VirtualMachineConfigSpec')
+        create_spec.name = name
+        create_spec.guestId = 'otherGuest'
+        create_spec.numCPUs = 1
+        create_spec.memoryMB = 128
+        create_spec.deviceChange = [controller_spec, disk_spec]
+        create_spec.extraConfig = None
+        create_spec.files = vm_file_info
+
+        LOG.debug(_("Spec for creating the backing: %s.") % create_spec)
+        return create_spec
+
     def attach_disk_to_vm(self, vm_ref, instance,
                           adapter_type, disk_type, vmdk_path=None,
                           disk_size=None, linked_clone=False,

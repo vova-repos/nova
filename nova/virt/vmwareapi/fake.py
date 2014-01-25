@@ -396,7 +396,9 @@ class VirtualMachine(ManagedObject):
         self.set("config.files.vmPathName", kwargs.get("vmPathName"))
         self.set("summary.config.numCpu", kwargs.get("numCpu", 1))
         self.set("summary.config.memorySizeMB", kwargs.get("mem", 1))
-        self.set("summary.config.instanceUuid", kwargs.get("instanceUuid"))
+        instance_uuid = kwargs.get("instanceUuid")
+        if instance_uuid:
+            self.set("summary.config.instanceUuid", instance_uuid)
         self.set("config.hardware.device", kwargs.get("virtual_device", None))
         exconfig_do = kwargs.get("extra_config", None)
         self.set("config.extraConfig",
@@ -936,6 +938,22 @@ def fake_fetch_image(*args, **kwargs):
     return True
 
 
+def fake_download_stream_optimized_image(context, timeout_secs, image_service,
+                                         image, **kwargs):
+    """Fakes image fetch. Adds a new vm object and files to the db."""
+    import_spec = kwargs.get("vm_import_spec")
+    ds_name = import_spec.configSpec.files.vmPathName
+    image_name = import_spec.configSpec.name
+    ds_image_dir = "%s %s" % (ds_name, image_name)
+    ds_file_path = "%s %s/%s.vmdk" % (ds_name, image_name, image_name)
+    flat_ds_file_path = ds_file_path.replace(".vmdk", "-flat.vmdk")
+    _add_file(ds_image_dir)
+    _add_file(ds_file_path)
+    _add_file(flat_ds_file_path)
+    vm_ref = FakeVim._add_new_vm(import_spec.configSpec)
+    return vm_ref
+
+
 def fake_upload_image(context, image, instance, **kwargs):
     """Fakes the upload of an image."""
     pass
@@ -1067,9 +1085,8 @@ class FakeVim(object):
         except Exception:
             return False
 
-    def _create_vm(self, method, *args, **kwargs):
-        """Creates and registers a VM object with the Host System."""
-        config_spec = kwargs.get("config")
+    @staticmethod
+    def _add_new_vm(config_spec):
         ds = _db_content["Datastore"].keys()[0]
         host = _db_content["HostSystem"].keys()[0]
         vm_dict = {"name": config_spec.name,
@@ -1081,9 +1098,15 @@ class FakeVim(object):
                   "mem": config_spec.memoryMB,
                   "extra_config": config_spec.extraConfig,
                   "virtual_device": config_spec.deviceChange,
-                  "instanceUuid": config_spec.instanceUuid}
+                  "instanceUuid": getattr(config_spec, 'instanceUuid', None)}
         virtual_machine = VirtualMachine(**vm_dict)
         _create_object("VirtualMachine", virtual_machine)
+        return virtual_machine.obj
+
+    def _create_vm(self, method, *args, **kwargs):
+        """Creates and registers a VM object with the Host System."""
+        config_spec = kwargs.get("config")
+        FakeVim._add_new_vm(config_spec)
         task_mdo = create_task(method, "success")
         return task_mdo.obj
 
@@ -1101,6 +1124,20 @@ class FakeVim(object):
         flat_vmdk_file_path = vmdk_file_path.replace(".vmdk", "-flat.vmdk")
         _add_file(vmdk_file_path)
         _add_file(flat_vmdk_file_path)
+        task_mdo = create_task(method, "success")
+        return task_mdo.obj
+
+    def _move_disk(self, method, src_vmdk_file_path, dst_vmdk_file_path):
+        """Creates/copies a vmdk file object in the datastore."""
+        # We need to move both .vmdk and .-flat.vmdk files
+        src_flat_vmdk_file_path = src_vmdk_file_path.replace(".vmdk",
+                                                             "-flat.vmdk")
+        dst_flat_vmdk_file_path = dst_vmdk_file_path.replace(".vmdk",
+                                                             "-flat.vmdk")
+        _add_file(dst_vmdk_file_path)
+        _add_file(dst_flat_vmdk_file_path)
+        _remove_file(src_vmdk_file_path)
+        _remove_file(src_flat_vmdk_file_path)
         task_mdo = create_task(method, "success")
         return task_mdo.obj
 
@@ -1352,6 +1389,10 @@ class FakeVim(object):
                                                 *args, **kwargs)
         elif attr_name == "CopyVirtualDisk_Task":
             return lambda *args, **kwargs: self._create_copy_disk(attr_name,
+                                                kwargs.get("destName"))
+        elif attr_name == "MoveVirtualDisk_Task":
+            return lambda *args, **kwargs: self._move_disk(attr_name,
+                                                kwargs.get("sourceName"),
                                                 kwargs.get("destName"))
         elif attr_name == "ExtendVirtualDisk_Task":
             return lambda *args, **kwargs: self._extend_disk(attr_name,

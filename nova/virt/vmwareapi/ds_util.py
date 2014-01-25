@@ -57,6 +57,45 @@ def file_delete(session, datastore_path, dc_ref):
     LOG.debug(_("Deleted the datastore file"))
 
 
+def disk_move(session, dc_ref, src_file, dst_file):
+    """Moves the source virtual disk to the destination.
+
+    The list of possible faults that the server can return on error
+    include:
+    - CannotAccessFile: Thrown if the source file or folder cannot be
+                        moved because of insufficient permissions.
+    - FileAlreadyExists: Thrown if a file with the given name already
+                         exists at the destination.
+    - FileFault: Thrown if there is a generic file error
+    - FileLocked: Thrown if the source file or folder is currently
+                  locked or in use.
+    - FileNotFound: Thrown if the file or folder specified by sourceName
+                    is not found.
+    - InvalidDatastore: Thrown if the operation cannot be performed on
+                        the source or destination datastores.
+    - NoDiskSpace: Thrown if there is not enough space available on the
+                   destination datastore.
+    - RuntimeFault: Thrown if any type of runtime fault is thrown that
+                    is not covered by the other faults; for example,
+                    a communication error.
+    """
+
+    LOG.debug(_("Moving virtual disk from %(src)s to %(dst)s."),
+              {'src': src_file, 'dst': dst_file})
+    vim = session._get_vim()
+    move_task = session._call_method(
+            session._get_vim(),
+            "MoveVirtualDisk_Task",
+            vim.service_content.virtualDiskManager,
+            sourceName=src_file,
+            sourceDatacenter=dc_ref,
+            destName=dst_file,
+            destDatacenter=dc_ref,
+            force=False)
+    session._wait_for_task(move_task)
+    LOG.debug(_("Disk moved"))
+
+
 def file_move(session, dc_ref, src_file, dst_file):
     """Moves the source file or folder to the destination.
 
