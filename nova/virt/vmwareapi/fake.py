@@ -956,6 +956,22 @@ def fake_download_stream_optimized_image(context, timeout_secs, image_service,
     return vm_ref
 
 
+def fake_download_stream_optimized_data(context, timeout_secs, read_handle,
+                                        **kwargs):
+    """Fakes image fetch. Adds a new vm object and files to the db."""
+    import_spec = kwargs.get("vm_import_spec")
+    ds_name = import_spec.configSpec.files.vmPathName
+    image_name = import_spec.configSpec.name
+    ds_image_dir = "%s %s" % (ds_name, image_name)
+    ds_file_path = "%s %s/%s.vmdk" % (ds_name, image_name, image_name)
+    flat_ds_file_path = ds_file_path.replace(".vmdk", "-flat.vmdk")
+    _add_file(ds_image_dir)
+    _add_file(ds_file_path)
+    _add_file(flat_ds_file_path)
+    vm_ref = FakeVim._add_new_vm(import_spec.configSpec)
+    return vm_ref
+
+
 def fake_upload_image(context, timeout_secs, image_service, image_id, owner_id,
                       **kwargs):
     """Fakes the upload of an image."""
@@ -975,7 +991,7 @@ def fake_get_vmdk_size_and_properties(context, image_id, instance):
     """Fakes the file size and properties fetch for the image file."""
     props = {"vmware_ostype": "otherGuest",
             "vmware_adaptertype": "lsiLogic"}
-    return _FAKE_FILE_SIZE, props
+    return _FAKE_FILE_SIZE, "bare", props
 
 
 def _get_vm_mdo(vm_ref):

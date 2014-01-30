@@ -626,9 +626,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
     def test_spawn_disk_extend_sparse(self):
         self.mox.StubOutWithMock(vmware_images, 'get_vmdk_size_and_properties')
-        result = [1024, {"vmware_ostype": "otherGuest",
-                         "vmware_adaptertype": "lsiLogic",
-                         "vmware_disktype": "sparse"}]
+        result = [1024, "bare", {"vmware_ostype": "otherGuest",
+                                 "vmware_adaptertype": "lsiLogic",
+                                 "vmware_disktype": "sparse"}]
         vmware_images.get_vmdk_size_and_properties(
                 mox.IgnoreArg(), mox.IgnoreArg(),
                 mox.IgnoreArg()).AndReturn(result)
@@ -678,7 +678,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
     def test_spawn_disk_invalid_disk_size(self):
         self.mox.StubOutWithMock(vmware_images, 'get_vmdk_size_and_properties')
-        result = [82 * units.Gi,
+        result = [82 * units.Gi, "bare",
                   {"vmware_ostype": "otherGuest",
                    "vmware_adaptertype": "lsiLogic",
                    "vmware_disktype": "sparse"}]
@@ -827,11 +827,11 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
     def _spawn_disk_stream_optimized(self, use_linked_clone):
         self.mox.StubOutWithMock(vmware_images, 'get_vmdk_size_and_properties')
-        result = [1024, {"vmware_ostype": "otherGuest",
-                         "vmware_adaptertype": "lsiLogic",
-                         "vmware_disktype": "streamOptimized",
-                         "vmware_linked_clone": use_linked_clone,
-                         }]
+        result = [1024, "bare", {"vmware_ostype": "otherGuest",
+                                 "vmware_adaptertype": "lsiLogic",
+                                 "vmware_disktype": "streamOptimized",
+                                 "vmware_linked_clone": use_linked_clone,
+                                 }]
         vmware_images.get_vmdk_size_and_properties(
                 mox.IgnoreArg(), mox.IgnoreArg(),
                 mox.IgnoreArg()).AndReturn(result)
@@ -1942,9 +1942,9 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase):
     def test_spawn_with_sparse_image(self):
         # Only a sparse disk image triggers the copy
         self.mox.StubOutWithMock(vmware_images, 'get_vmdk_size_and_properties')
-        result = [1024, {"vmware_ostype": "otherGuest",
-                         "vmware_adaptertype": "lsiLogic",
-                         "vmware_disktype": "sparse"}]
+        result = [1024, "bare", {"vmware_ostype": "otherGuest",
+                                 "vmware_adaptertype": "lsiLogic",
+                                 "vmware_disktype": "sparse"}]
         vmware_images.get_vmdk_size_and_properties(
                 mox.IgnoreArg(), mox.IgnoreArg(),
                 mox.IgnoreArg()).AndReturn(result)

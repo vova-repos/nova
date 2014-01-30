@@ -200,7 +200,7 @@ class VMwareVMOps(object):
 
     def fetch_image_on_datastore(self, context, instance,
             image_meta, upload_location, cookies,
-            disk_type, image_size_kb,
+            disk_type, image_size_kb, container_format,
             data_store_name, data_center_name,
             res_pool_ref, vm_folder_ref):
         """Fetch image from Glance to datastore."""
@@ -235,17 +235,32 @@ class VMwareVMOps(object):
                                      'ns0:VirtualMachineImportSpec')
             vm_import_spec.configSpec = vm_create_spec
 
-            imported_vm_ref = image_transfer.download_stream_optimized_image(
-                context,
-                CONF.vmware.image_transfer_timeout_secs,
-                image_service,
-                image_id,
-                session=self._session,
-                host=self._session._host,
-                image_size=image_size,
-                resource_pool=res_pool_ref,
-                vm_folder=vm_folder_ref,
-                vm_import_spec=vm_import_spec)
+            found_adapter_type = None
+            if container_format == 'ovf':
+                (imported_vm,
+                 found_adapter_type) = vmware_images.fetch_ova_image(
+                    context,
+                    CONF.vmware.image_transfer_timeout_secs,
+                    image_service,
+                    image_id,
+                    session=self._session,
+                    host=self._session._host,
+                    image_size=image_size,
+                    resource_pool=res_pool_ref,
+                    vm_folder=vm_folder_ref,
+                    vm_import_spec=vm_import_spec)
+            else:
+                imported_vm = image_transfer.download_stream_optimized_image(
+                    context,
+                    CONF.vmware.image_transfer_timeout_secs,
+                    image_service,
+                    image_id,
+                    session=self._session,
+                    host=self._session._host,
+                    image_size=image_size,
+                    resource_pool=res_pool_ref,
+                    vm_folder=vm_folder_ref,
+                    vm_import_spec=vm_import_spec)
             LOG.debug(_("Downloaded image file data %(image_ref)s to "
                         "the datastore %(data_store_name)s") %
                         {'image_ref': instance['image_ref'],
@@ -255,11 +270,12 @@ class VMwareVMOps(object):
             try:
                 LOG.debug(_("Unregistering the VM"), instance=instance)
                 self._session._call_method(self._session._get_vim(),
-                                           "UnregisterVM", imported_vm_ref)
+                                           "UnregisterVM", imported_vm)
                 LOG.debug(_("Unregistered the imported VM"), instance=instance)
             except Exception as excep:
                 LOG.warn(_("Exception while unregistering the "
-                           "imported VM: %s") % str(excep))
+                           "imported VM: %s"), str(excep))
+            return found_adapter_type
         else:
             for handler, loc, image_meta in imagehandler.handle_image(
                     context, instance['image_ref']):
@@ -331,9 +347,9 @@ class VMwareVMOps(object):
                         context, image_ref, instance)
             else:
                 # The case that the image may be booted from a volume
-                _image_info = (root_size, {})
+                _image_info = (root_size, "bare", {})
 
-            image_size, image_properties = _image_info
+            image_size, container_format, image_properties = _image_info
             vmdk_file_size_in_kb = int(image_size) / 1024
             os_type = image_properties.get("vmware_ostype", "otherGuest")
             adapter_type = image_properties.get("vmware_adaptertype",
@@ -350,12 +366,13 @@ class VMwareVMOps(object):
             image_linked_clone = image_properties.get(VMWARE_LINKED_CLONE)
 
             return (vmdk_file_size_in_kb, os_type, adapter_type, disk_type,
-                vif_model, image_linked_clone)
+                    container_format, vif_model, image_linked_clone)
 
         root_gb = instance['root_gb']
         root_gb_in_kb = root_gb * units.Mi
 
-        (vmdk_file_size_in_kb, os_type, adapter_type, disk_type, vif_model,
+        (vmdk_file_size_in_kb, os_type, adapter_type, disk_type,
+            container_format, vif_model,
             image_linked_clone) = _get_image_properties(root_gb_in_kb)
 
         client_factory = self._session._get_vim().client.factory
@@ -616,11 +633,22 @@ class VMwareVMOps(object):
                                     flat_uploaded_ds_path,
                                     dc_info.ref)
 
-                self.fetch_image_on_datastore(context, instance,
+                found_adapter_type = self.fetch_image_on_datastore(
+                        context, instance,
                         image_meta, upload_location, cookies,
                         disk_type, vmdk_file_size_in_kb,
-                        data_store_name, dc_info.name,
+                        container_format, data_store_name, dc_info.name,
                         res_pool_ref, vm_folder_ref)
+
+                if found_adapter_type and found_adapter_type != adapter_type:
+                    # TODO(vui): Consider override with found_adapter_type,
+                    # as well as facilitating the same for cached spawns.
+                    LOG.warning(_("The adapter type read from the OVA "
+                        "(%(current)s) differs from that of the image "
+                        "(%(found)s). The vmware_adaptertype property of the "
+                        " glance image is likely misconfigured."),
+                        {'found': found_adapter_type,
+                         'current': adapter_type})
 
                 if not is_iso and disk_type == "sparse":
                     # Copy the sparse virtual disk to a thin virtual disk.
