@@ -22,7 +22,6 @@ from nova.openstack.common import log as logging
 from nova.virt.imagehandler import base
 from nova.virt import vmwareapi
 from nova.virt.vmwareapi import read_write_util
-from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmware_images
 
 LOG = logging.getLogger(__name__)
@@ -49,84 +48,6 @@ class DownloadImageHandler(base.ImageHandler):
                      user_id=None, project_id=None, location=None,
                      **kwargs):
         LOG.debug(_("Fetching image %s from glance image server"), image_id)
-
-        session = kwargs.get('session')
-        if session is None:
-            LOG.error(_("Cannot fetch image %s with null session") % image_id)
-            return
-        dst_dc_path = kwargs.get("datacenter_name")
-        if dst_dc_path is None:
-            LOG.error(_("Cannot fetch image %s with null datacenter path") %
-                      image_id)
-            return
-        dst_ds_name = kwargs.get('datastore_name')
-        if dst_ds_name is None:
-            LOG.error(_("Cannot fetch image %s with null datastore name") %
-                      image_id)
-            return
-        disk_type = kwargs.get('disk_type')
-        if disk_type is None:
-            LOG.error(_("Cannot fetch image %s with null disk type")
-                      % disk_type)
-            return
-        vmdk_file_size_in_kb = kwargs.get('vmdk_file_size_in_kb')
-        if vmdk_file_size_in_kb is None:
-            LOG.error(_('Cannot fetch image %s with null file size')
-                      % image_id)
-            return
-        adapter_type = kwargs.get('adapter_type')
-        if adapter_type is None:
-            LOG.error(_('Cannot fetch image %s with null adapter type')
-                      % image_id)
-            return
-
-        if disk_type != "sparse":
-            # Create a flat virtual disk (*-flat.vmdk + *.vmdk) and
-            # retain the descriptor file (*.vmdk) in the temp directory.
-            descriptor_ds_path = ('[%s] %s.vmdk' % (dst_ds_name, path[:-10]))
-            vmdk_ds_path = ('[%s] %s' % (dst_ds_name, path))
-            service_content = session._get_vim().retrieve_service_content()
-            search_index_moref = service_content.searchIndex
-            client_factory = session._get_vim().client.factory
-
-            vmdk_create_spec = vm_util.get_vmdk_create_spec(
-                client_factory, vmdk_file_size_in_kb, adapter_type, disk_type)
-
-            dst_moref = session._call_method(session._get_vim(),
-                                             'FindByInventoryPath',
-                                             search_index_moref,
-                                             inventoryPath=dst_dc_path)
-            if dst_moref is None:
-                LOG.error(_("Unable to find the moref for datacenter %s"),
-                          dst_dc_path)
-                return
-
-            # Create directory for the image in the temp directory
-            folder = '[%s] %s' % (dst_ds_name, path.rsplit('/', 1)[0])
-            session._call_method(session._get_vim(),
-                                 "MakeDirectory",
-                                 service_content.fileManager,
-                                 name=folder,
-                                 datacenter=dst_moref,
-                                 createParentDirectories=True)
-
-            vmdk_create_task = session._call_method(
-                session._get_vim(),
-                "CreateVirtualDisk_Task",
-                service_content.virtualDiskManager,
-                name=descriptor_ds_path,
-                datacenter=dst_moref,
-                spec=vmdk_create_spec)
-            session._wait_for_task(None, vmdk_create_task)
-
-            file_delete_task = session._call_method(
-                session._get_vim(),
-                "DeleteDatastoreFile_Task",
-                service_content.fileManager,
-                name=vmdk_ds_path,
-                datacenter=dst_moref)
-            session._wait_for_task(None, file_delete_task)
-
         (image_service, image_id) = glance.get_remote_image_service(context,
                                                                     image_id)
         file_size = int(image_meta.get('size'))
@@ -147,7 +68,6 @@ class DownloadImageHandler(base.ImageHandler):
                       {'image': image_id, 'exc': exc})
             return False
         LOG.debug(_("Fetched image %s from glance image server"), image_id)
-
         return True
 
     def _remove_image(self, context, image_id, image_meta, path,
