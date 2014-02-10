@@ -34,6 +34,7 @@ from nova.compute import task_states
 from nova import context as nova_context
 from nova import exception
 from nova.image import glance
+from nova.network import model as network_model
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import lockutils
@@ -357,7 +358,8 @@ class VMwareVMOps(object):
             disk_type = image_properties.get("vmware_disktype",
                                              "preallocated")
             # Get the network card type from the image properties.
-            vif_model = image_properties.get("hw_vif_model", "VirtualE1000")
+            vif_model = image_properties.get("hw_vif_model",
+                                             network_model.VIF_MODEL_E1000)
 
             # Fetch the image_linked_clone data here. It is retrieved
             # with the above network based API call. To retrieve it

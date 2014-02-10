@@ -39,6 +39,15 @@ VIF_TYPE_MLNX_DIRECT = 'mlnx_direct'
 VIF_TYPE_MIDONET = 'midonet'
 VIF_TYPE_OTHER = 'other'
 
+# Constants for the 'vif_model' values
+VIF_MODEL_VIRTIO = 'virtio'
+VIF_MODEL_NE2K_PCI = 'ne2k_pci'
+VIF_MODEL_PCNET = 'pcnet'
+VIF_MODEL_RTL8139 = 'rtl8139'
+VIF_MODEL_E1000 = 'e1000'
+VIF_MODEL_E1000E = 'e1000e'
+VIF_MODEL_NETFRONT = 'netfront'
+
 # Constant for max length of network interface names
 # eg 'bridge' in the Network class or 'devname' in
 # the VIF class
