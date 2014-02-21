@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -79,7 +78,3 @@ class ServicesJsonTest(api_sample_base.ApiSampleTestBaseV3):
                                 'service-disable-log-put-req', subs)
         return self._verify_response('service-disable-log-put-resp',
                                      subs, response, 200)
-
-
-class ServicesXmlTest(ServicesJsonTest):
-    ctype = 'xml'

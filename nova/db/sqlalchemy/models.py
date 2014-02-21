@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -122,32 +120,8 @@ class ComputeNode(BASE, NovaBase):
     # data about additional resources.
     extra_resources = Column(Text)
 
-
-class ComputeNodeStat(BASE, NovaBase):
-    """Stats related to the current workload of a compute host that are
-    intended to aid in making scheduler decisions.
-    """
-    __tablename__ = 'compute_node_stats'
-    __table_args__ = (
-        Index('ix_compute_node_stats_compute_node_id', 'compute_node_id'),
-        Index('compute_node_stats_node_id_and_deleted_idx',
-              'compute_node_id', 'deleted')
-    )
-
-    id = Column(Integer, primary_key=True)
-    key = Column(String(255), nullable=False)
-    value = Column(String(255))
-    compute_node_id = Column(Integer, ForeignKey('compute_nodes.id'),
-                             nullable=False)
-    compute_node = relationship(ComputeNode, backref=backref('stats'),
-                                foreign_keys=compute_node_id,
-                                primaryjoin='and_('
-                                    'ComputeNodeStat.compute_node_id == '
-                                      'ComputeNode.id,'
-                                    'ComputeNodeStat.deleted == 0)')
-
-    def __str__(self):
-        return "{%d: %s = %s}" % (self.compute_node_id, self.key, self.value)
+    # json-encode string containing compute node statistics
+    stats = Column(Text, default='{}')
 
 
 class Certificate(BASE, NovaBase):
@@ -211,6 +185,7 @@ class Instance(BASE, NovaBase):
                 base_name = self.uuid
         return base_name
 
+    @property
     def _extra_keys(self):
         return ['name']
 
@@ -234,6 +209,7 @@ class Instance(BASE, NovaBase):
     vcpus = Column(Integer)
     root_gb = Column(Integer)
     ephemeral_gb = Column(Integer)
+    ephemeral_key_uuid = Column(String(36))
 
     # This is not related to hostname, above.  It refers
     #  to the nova node.
@@ -1098,6 +1074,7 @@ class Aggregate(BASE, NovaBase):
                              'AggregateMetadata.deleted == 0,'
                              'Aggregate.deleted == 0)')
 
+    @property
     def _extra_keys(self):
         return ['hosts', 'metadetails', 'availability_zone']
 

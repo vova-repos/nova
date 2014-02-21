@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -38,5 +36,6 @@ def main():
     server = service.Service.create(binary='nova-conductor',
                                     topic=CONF.conductor.topic,
                                     manager=CONF.conductor.manager)
-    service.serve(server, workers=CONF.conductor.workers)
+    workers = CONF.conductor.workers or utils.cpu_count()
+    service.serve(server, workers=workers)
     service.wait()

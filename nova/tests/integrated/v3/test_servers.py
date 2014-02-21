@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -65,15 +64,7 @@ class ServersSampleJsonTest(ServersSampleBase):
         self._verify_response('servers-details-resp', subs, response, 200)
 
 
-class ServersSampleXmlTest(ServersSampleJsonTest):
-    ctype = 'xml'
-
-
 class ServersSampleAllExtensionJsonTest(ServersSampleJsonTest):
-    all_extensions = True
-
-
-class ServersSampleAllExtensionXmlTest(ServersSampleXmlTest):
     all_extensions = True
 
 
@@ -166,7 +157,3 @@ class ServersActionsJsonTest(ServersSampleBase):
         uuid = self._post_server()
         self._test_server_action(uuid, 'create_image',
                                  {'name': 'foo-image'})
-
-
-class ServersActionsXmlTest(ServersActionsJsonTest):
-    ctype = 'xml'

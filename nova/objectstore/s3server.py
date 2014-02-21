@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # Copyright 2010 OpenStack Foundation
@@ -308,6 +306,16 @@ class BucketHandler(BaseRequestHandler):
             return
         os.rmdir(path)
         self.set_status(204)
+        self.finish()
+
+    def head(self, bucket_name):
+        path = os.path.abspath(os.path.join(self.application.directory,
+                                            bucket_name))
+        if (not path.startswith(self.application.directory) or
+                not os.path.isdir(path)):
+            self.set_404()
+            return
+        self.set_status(200)
         self.finish()
 
 

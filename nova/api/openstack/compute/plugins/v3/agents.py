@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -17,10 +15,9 @@
 
 import webob.exc
 
-from nova.api.openstack.compute.schemas.v3 import agents_schema
+from nova.api.openstack.compute.schemas.v3 import agents as schema
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
-from nova.api.openstack import xmlutil
 from nova.api import validation
 from nova import db
 from nova import exception
@@ -28,21 +25,6 @@ from nova import exception
 
 ALIAS = "os-agents"
 authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
-
-
-class AgentsIndexTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('agents')
-        elem = xmlutil.SubTemplateElement(root, 'agent', selector='agents')
-        elem.set('hypervisor')
-        elem.set('os')
-        elem.set('architecture')
-        elem.set('version')
-        elem.set('md5hash')
-        elem.set('agent_id')
-        elem.set('url')
-
-        return xmlutil.MasterTemplate(root, 1)
 
 
 class AgentController(object):
@@ -69,7 +51,6 @@ class AgentController(object):
     http://wiki.openstack.org/GuestAgentXenStoreCommunication
     """
     @extensions.expected_errors(())
-    @wsgi.serializers(xml=AgentsIndexTemplate)
     def index(self, req):
         """
         Return a list of all agent builds. Filter by hypervisor.
@@ -93,7 +74,7 @@ class AgentController(object):
         return {'agents': agents}
 
     @extensions.expected_errors((400, 404))
-    @validation.schema(request_body_schema=agents_schema.update)
+    @validation.schema(schema.update)
     def update(self, req, id, body):
         """Update an existing agent build."""
         context = req.environ['nova.context']
@@ -129,7 +110,7 @@ class AgentController(object):
 
     @extensions.expected_errors((400, 409))
     @wsgi.response(201)
-    @validation.schema(request_body_schema=agents_schema.create)
+    @validation.schema(schema.create)
     def create(self, req, body):
         """Creates a new agent build."""
         context = req.environ['nova.context']
@@ -162,7 +143,6 @@ class Agents(extensions.V3APIExtensionBase):
 
     name = "Agents"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/ext/agents/api/v3"
     version = 1
 
     def get_resources(self):

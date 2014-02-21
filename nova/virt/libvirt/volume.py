@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 OpenStack Foundation
 # (c) Copyright 2013 Hewlett-Packard Development Company, L.P.
 # All Rights Reserved.
@@ -22,10 +20,10 @@ import glob
 import os
 import time
 import urllib2
-import urlparse
 
 from oslo.config import cfg
 import six
+import six.moves.urllib.parse as urlparse
 
 from nova import exception
 from nova.openstack.common.gettextutils import _
@@ -42,11 +40,11 @@ LOG = logging.getLogger(__name__)
 
 volume_opts = [
     cfg.IntOpt('num_iscsi_scan_tries',
-               default=3,
+               default=5,
                help='Number of times to rescan iSCSI target to find volume',
                deprecated_group='DEFAULT'),
     cfg.IntOpt('num_iser_scan_tries',
-               default=3,
+               default=5,
                help='Number of times to rescan iSER target to find volume',
                deprecated_group='DEFAULT'),
     cfg.StrOpt('rbd_user',

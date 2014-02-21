@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -33,6 +31,7 @@ from nova.compute import task_states
 from nova import db
 from nova import exception
 from nova.openstack.common.gettextutils import _
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import driver
@@ -103,6 +102,7 @@ class FakeDriver(driver.ComputeDriver):
           'hypervisor_hostname': CONF.host,
           'cpu_info': {},
           'disk_available_least': 500000000000,
+          'supported_instances': [(None, 'fake', None)],
           }
         self._mounts = {}
         self._interfaces = {}
@@ -324,6 +324,11 @@ class FakeDriver(driver.ComputeDriver):
                 'port': 6969,
                 'tlsPort': 6970}
 
+    def get_rdp_console(self, context, instance):
+        return {'internal_access_path': 'FAKE',
+                'host': 'fakerdpconsole.com',
+                'port': 6969}
+
     def get_console_pool_info(self, console_type):
         return {'address': '127.0.0.1',
                 'username': 'fakeuser',
@@ -360,7 +365,9 @@ class FakeDriver(driver.ComputeDriver):
                'hypervisor_version': '1.0',
                'hypervisor_hostname': nodename,
                'disk_available_least': 0,
-               'cpu_info': '?'}
+               'cpu_info': '?',
+               'supported_instances': jsonutils.dumps([(None, 'fake', None)])
+              }
         return dic
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
@@ -482,6 +489,3 @@ class FakeVirtAPI(virtapi.VirtAPI):
         if legacy:
             bdms = block_device.legacy_mapping(bdms)
         return bdms
-
-    def block_device_mapping_update(self, context, bdm_id, values):
-        return db.block_device_mapping_update(context, bdm_id, values)

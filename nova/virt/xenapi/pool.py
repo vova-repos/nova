@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 Citrix Systems, Inc.
 # Copyright 2010 OpenStack Foundation
 #
@@ -19,9 +17,8 @@
 Management class for Pool-related functions (join, eject, etc).
 """
 
-import urlparse
-
 from oslo.config import cfg
+import six.moves.urllib.parse as urlparse
 
 from nova.compute import rpcapi as compute_rpcapi
 from nova import exception

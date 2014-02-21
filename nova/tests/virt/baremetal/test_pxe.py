@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2012 Hewlett-Packard Development Company, L.P.
@@ -83,6 +82,9 @@ class BareMetalPXETestCase(bm_db_base.BMDBTestCase):
             ]
 
     def _create_node(self):
+        # File injection is off by default, but we should continue to test it
+        # until it is removed.
+        CONF.set_override('use_file_injection', True, 'baremetal')
         self.node = db.bm_node_create(self.context, self.node_info)
         for nic in self.nic_info:
             db.bm_interface_create(
@@ -382,9 +384,13 @@ class PXEPrivateMethodsTestCase(BareMetalPXETestCase):
 
     def test_cache_image(self):
         self.mox.StubOutWithMock(os, 'makedirs')
+        self.mox.StubOutWithMock(os, 'unlink')
         self.mox.StubOutWithMock(os.path, 'exists')
-        os.makedirs(pxe.get_image_dir_path(self.instance)).\
-                AndReturn(True)
+        os.makedirs(pxe.get_image_dir_path(self.instance)).AndReturn(True)
+        disk_path = os.path.join(
+            pxe.get_image_dir_path(self.instance), 'disk')
+        os.unlink(disk_path).AndReturn(None)
+        os.path.exists(disk_path).AndReturn(True)
         os.path.exists(pxe.get_image_file_path(self.instance)).\
                 AndReturn(True)
         self.mox.ReplayAll()

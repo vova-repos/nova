@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -44,8 +43,7 @@ class ExtendedVolumesSampleJsonTests(test_servers.ServersSampleBase):
 
     def _stub_compute_api_get(self):
 
-        def fake_compute_api_get(self, context, instance_id,
-                                 want_objects=False):
+        def fake_compute_api_get(self, context, instance_id, **kwargs):
             return {'uuid': instance_id}
 
         self.stubs.Set(compute_api.API, 'get', fake_compute_api_get)
@@ -137,7 +135,3 @@ class ExtendedVolumesSampleJsonTests(test_servers.ServersSampleBase):
                                  'swap-volume-req', subs)
         self.assertEqual(response.status, 202)
         self.assertEqual(response.read(), '')
-
-
-class ExtendedVolumesSampleXmlTests(ExtendedVolumesSampleJsonTests):
-    ctype = 'xml'

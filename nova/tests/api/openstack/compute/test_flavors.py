@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -16,9 +14,8 @@
 #    under the License.
 
 from lxml import etree
+import six.moves.urllib.parse as urlparse
 import webob
-
-import urlparse
 
 from nova.api.openstack.compute import flavors
 from nova.api.openstack import xmlutil

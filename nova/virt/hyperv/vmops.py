@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2010 Cloud.com, Inc
 # Copyright 2012 Cloudbase Solutions Srl
 # All Rights Reserved.
@@ -176,12 +174,12 @@ class VMOps(object):
                                   " original size is %(base_vhd_size)s, the"
                                   " newer size is %(root_vhd_size)s"
                                   ) % {'base_vhd_size': base_vhd_size,
-                                       'root_vhd_size': root_vhd_size}
+                                       'root_vhd_size': root_vhd_internal_size}
                     raise vmutils.HyperVException(error_msg)
                 elif root_vhd_internal_size > base_vhd_size:
                     LOG.debug(_("Resizing VHD %(root_vhd_path)s to new "
                                 "size %(root_vhd_size)s"),
-                              {'base_vhd_path': base_vhd_path,
+                              {'root_vhd_size': root_vhd_internal_size,
                                'root_vhd_path': root_vhd_path})
                     self._vhdutils.resize_vhd(root_vhd_path, root_vhd_size)
         except Exception:

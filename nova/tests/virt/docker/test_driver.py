@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 # Copyright (c) 2013 dotCloud, Inc.
 # All Rights Reserved.
 #
@@ -39,9 +37,9 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
     def setUp(self):
         super(DockerDriverTestCase, self).setUp()
 
-        self.stubs.Set(nova.virt.docker.driver.DockerDriver,
-                       'docker',
-                       nova.tests.virt.docker.mock_client.MockClient())
+        self.mock_client = nova.tests.virt.docker.mock_client.MockClient()
+        self.stubs.Set(nova.virt.docker.driver.DockerDriver, 'docker',
+                       self.mock_client)
 
         def fake_setup_network(self, instance, network_info):
             return
@@ -159,6 +157,8 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
         self.connection.spawn(self.context, instance_href, image_info,
                               'fake_files', 'fake_password')
         self._assert_cpu_shares(instance_href)
+        self.assertEqual(self.mock_client.name, "nova-{0}".format(
+            instance_href['uuid']))
 
     def test_create_container_vcpus_2(self, image_info=None):
         flavor = utils.get_test_flavor(options={
@@ -174,12 +174,21 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
         self.connection.spawn(self.context, instance_href, image_info,
                               'fake_files', 'fake_password')
         self._assert_cpu_shares(instance_href, vcpus=2)
+        self.assertEqual(self.mock_client.name, "nova-{0}".format(
+            instance_href['uuid']))
 
     def _assert_cpu_shares(self, instance_href, vcpus=4):
         container_id = self.connection.find_container_by_name(
             instance_href['name']).get('id')
         container_info = self.connection.docker.inspect_container(container_id)
         self.assertEqual(vcpus * 1024, container_info['Config']['CpuShares'])
+
+    @mock.patch('nova.virt.docker.driver.DockerDriver._setup_network',
+                side_effect=Exception)
+    def test_create_container_net_setup_fails(self, mock_setup_network):
+        self.assertRaises(exception.InstanceDeployFailure,
+                          self.test_create_container)
+        self.assertEqual(0, len(self.mock_client.list_containers()))
 
     def test_create_container_wrong_image(self):
         instance_href = utils.get_test_instance()

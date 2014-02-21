@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 #
 # Copyright (c) 2012 NTT DOCOMO, INC
@@ -113,6 +112,7 @@ class BareMetalDriver(driver.ComputeDriver):
 
     capabilities = {
         "has_imagecache": True,
+        "supports_recreate": False,
         }
 
     def __init__(self, virtapi, read_only=False):
@@ -289,6 +289,9 @@ class BareMetalDriver(driver.ComputeDriver):
                 self._unplug_vifs(instance, network_info)
 
                 _update_state(context, node, None, baremetal_states.DELETED)
+        else:
+            # We no longer need the image since we successfully deployed.
+            self.driver.destroy_images(context, node, instance)
 
     def rebuild(self, context, instance, image_meta, injected_files,
                 admin_password, bdms, detach_block_devices,
@@ -479,7 +482,7 @@ class BareMetalDriver(driver.ComputeDriver):
                'cpu_info': 'baremetal cpu',
                'supported_instances':
                         jsonutils.dumps(self.supported_instances),
-               'stats': self.extra_specs
+               'stats': jsonutils.dumps(self.extra_specs)
                }
         return dic
 

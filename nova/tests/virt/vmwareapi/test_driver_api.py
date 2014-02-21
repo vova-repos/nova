@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
@@ -181,6 +179,28 @@ class VMwareSessionTestCase(test.NoDBTestCase):
                               stubs, 'fake_temp_session_exception',
                               *args, **kwargs)
 
+    def test_call_method_session_file_exists_exception(self):
+
+        def _fake_create_session(self):
+            session = vmwareapi_fake.DataObject()
+            session.key = 'fake_key'
+            session.userName = 'fake_username'
+            self._session = session
+
+        with contextlib.nested(
+            mock.patch.object(driver.VMwareAPISession, '_is_vim_object',
+                              self._fake_is_vim_object),
+            mock.patch.object(driver.VMwareAPISession, '_create_session',
+                              _fake_create_session),
+        ) as (_fake_vim, _fake_create):
+            api_session = driver.VMwareAPISession()
+            args = ()
+            kwargs = {}
+            self.assertRaises(error_util.FileAlreadyExistsException,
+                              api_session._call_method,
+                              stubs, 'fake_session_file_exception',
+                              *args, **kwargs)
+
 
 class VMwareAPIConfTestCase(test.NoDBTestCase):
     """Unit tests for VMWare API configurations."""
@@ -266,13 +286,20 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         }
         nova.tests.image.fake.stub_out_image_service(self.stubs)
         self.vnc_host = 'test_url'
+        self._set_exception_vars()
 
     def tearDown(self):
         super(VMwareAPIVMTestCase, self).tearDown()
         vmwareapi_fake.cleanup()
         nova.tests.image.fake.FakeImageService_reset()
 
-    def test_VC_Connection(self):
+    def _set_exception_vars(self):
+        self.wait_task = self.conn._session._wait_for_task
+        self.call_method = self.conn._session._call_method
+        self.task_ref = None
+        self.exception = False
+
+    def test_login_retries(self):
         self.attempts = 0
         self.login_session = vmwareapi_fake.FakeVim()._login()
 
@@ -285,6 +312,32 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.stubs.Set(vmwareapi_fake.FakeVim, '_login', _fake_login)
         self.conn = driver.VMwareAPISession()
         self.assertEqual(self.attempts, 2)
+
+    def test_wait_for_task_exception(self):
+        self.flags(task_poll_interval=1, group='vmware')
+        self.login_session = vmwareapi_fake.FakeVim()._login()
+        self.stop_called = 0
+
+        def _fake_login(_self):
+            return self.login_session
+
+        self.stubs.Set(vmwareapi_fake.FakeVim, '_login', _fake_login)
+
+        def fake_poll_task(instance_uuid, task_ref, done):
+            done.send_exception(exception.NovaException('fake exception'))
+
+        def fake_stop_loop(loop):
+            self.stop_called += 1
+            return loop.stop()
+
+        self.conn = driver.VMwareAPISession()
+        self.stubs.Set(self.conn, "_poll_task",
+                       fake_poll_task)
+        self.stubs.Set(self.conn, "_stop_loop",
+                       fake_stop_loop)
+        self.assertRaises(exception.NovaException,
+                          self.conn._wait_for_task, 'fake-id', 'fake-ref')
+        self.assertEqual(self.stop_called, 1)
 
     def _create_instance_in_the_db(self, node=None, set_image_ref=True,
                                    uuid=None):
@@ -404,7 +457,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         """
 
         self._create_vm()
-        inst_file_path = '[%s] %s/fake_name.vmdk' % (self.ds, self.uuid)
+        inst_file_path = '[%s] %s/%s.vmdk' % (self.ds, self.uuid, self.uuid)
         cache = ('[%s] vmware_base/fake_image_uuid/fake_image_uuid.vmdk' %
                  self.ds)
         self.assertTrue(vmwareapi_fake.get_file(inst_file_path))
@@ -426,6 +479,46 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         info = self.conn.get_info({'uuid': self.uuid,
                                    'node': self.instance_node})
         self._check_vm_info(info, power_state.RUNNING)
+
+    def _spawn_with_delete_exception(self, fault=None):
+
+        def fake_call_method(module, method, *args, **kwargs):
+            task_ref = self.call_method(module, method, *args, **kwargs)
+            if method == "DeleteDatastoreFile_Task":
+                self.exception = True
+                task_mdo = vmwareapi_fake.create_task(method, "error",
+                        error_fault=fault)
+                return task_mdo.obj
+            return task_ref
+
+        with (
+            mock.patch.object(self.conn._session, '_call_method',
+                              fake_call_method)
+        ):
+            if fault:
+                self._create_vm()
+                info = self.conn.get_info({'uuid': self.uuid,
+                                           'node': self.instance_node})
+                self._check_vm_info(info, power_state.RUNNING)
+            else:
+                self.assertRaises(error_util.VMwareDriverException,
+                                  self._create_vm)
+            self.assertTrue(self.exception)
+
+    def test_spawn_with_delete_exception_not_found(self):
+        self._spawn_with_delete_exception(vmwareapi_fake.FileNotFound())
+
+    def test_spawn_with_delete_exception_file_fault(self):
+        self._spawn_with_delete_exception(vmwareapi_fake.FileFault())
+
+    def test_spawn_with_delete_exception_cannot_delete_file(self):
+        self._spawn_with_delete_exception(vmwareapi_fake.CannotDeleteFile())
+
+    def test_spawn_with_delete_exception_file_locked(self):
+        self._spawn_with_delete_exception(vmwareapi_fake.FileLocked())
+
+    def test_spawn_with_delete_exception_general(self):
+        self._spawn_with_delete_exception()
 
     def test_spawn_disk_extend(self):
         self.mox.StubOutWithMock(self.conn._vmops, '_extend_virtual_disk')
@@ -503,6 +596,111 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.assertRaises(exception.InstanceUnacceptable,
                           self._create_vm)
 
+    def test_spawn_with_move_file_exists_exception(self):
+        # The test will validate that the spawn completes
+        # successfully. The "MoveDatastoreFile_Task" will
+        # raise an file exists exception. The flag
+        # self.exception will be checked to see that
+        # the exception has indeed been raised.
+
+        def fake_wait_for_task(instance_uuid, task_ref):
+            if task_ref == self.task_ref:
+                self.task_ref = None
+                self.exception = True
+                raise error_util.FileAlreadyExistsException()
+            return self.wait_task(instance_uuid, task_ref)
+
+        def fake_call_method(module, method, *args, **kwargs):
+            task_ref = self.call_method(module, method, *args, **kwargs)
+            if method == "MoveDatastoreFile_Task":
+                self.task_ref = task_ref
+            return task_ref
+
+        with contextlib.nested(
+            mock.patch.object(self.conn._session, '_wait_for_task',
+                              fake_wait_for_task),
+            mock.patch.object(self.conn._session, '_call_method',
+                              fake_call_method)
+        ) as (_wait_for_task, _call_method):
+            self._create_vm()
+            info = self.conn.get_info({'uuid': self.uuid,
+                                       'node': self.instance_node})
+            self._check_vm_info(info, power_state.RUNNING)
+            self.assertTrue(self.exception)
+
+    def test_spawn_with_move_general_exception(self):
+        # The test will validate that the spawn completes
+        # successfully. The "MoveDatastoreFile_Task" will
+        # raise a general exception. The flag self.exception
+        # will be checked to see that the exception has
+        # indeed been raised.
+
+        def fake_wait_for_task(instance_uuid, task_ref):
+            if task_ref == self.task_ref:
+                self.task_ref = None
+                self.exception = True
+                raise error_util.VMwareDriverException('Exception!')
+            return self.wait_task(instance_uuid, task_ref)
+
+        def fake_call_method(module, method, *args, **kwargs):
+            task_ref = self.call_method(module, method, *args, **kwargs)
+            if method == "MoveDatastoreFile_Task":
+                self.task_ref = task_ref
+            return task_ref
+
+        with contextlib.nested(
+            mock.patch.object(self.conn._session, '_wait_for_task',
+                              fake_wait_for_task),
+            mock.patch.object(self.conn._session, '_call_method',
+                              fake_call_method)
+        ) as (_wait_for_task, _call_method):
+            self.assertRaises(error_util.VMwareDriverException,
+                              self._create_vm)
+            self.assertTrue(self.exception)
+
+    def test_spawn_with_move_poll_exception(self):
+        self.call_method = self.conn._session._call_method
+
+        def fake_call_method(module, method, *args, **kwargs):
+            task_ref = self.call_method(module, method, *args, **kwargs)
+            if method == "MoveDatastoreFile_Task":
+                task_mdo = vmwareapi_fake.create_task(method, "error")
+                return task_mdo.obj
+            return task_ref
+
+        with (
+            mock.patch.object(self.conn._session, '_call_method',
+                              fake_call_method)
+        ):
+            self.assertRaises(error_util.VMwareDriverException,
+                              self._create_vm)
+
+    def test_spawn_with_move_file_exists_poll_exception(self):
+        # The test will validate that the spawn completes
+        # successfully. The "MoveDatastoreFile_Task" will
+        # raise a file exists exception. The flag self.exception
+        # will be checked to see that the exception has
+        # indeed been raised.
+
+        def fake_call_method(module, method, *args, **kwargs):
+            task_ref = self.call_method(module, method, *args, **kwargs)
+            if method == "MoveDatastoreFile_Task":
+                self.exception = True
+                task_mdo = vmwareapi_fake.create_task(method, "error",
+                        error_fault=vmwareapi_fake.FileAlreadyExists())
+                return task_mdo.obj
+            return task_ref
+
+        with (
+            mock.patch.object(self.conn._session, '_call_method',
+                              fake_call_method)
+        ):
+            self._create_vm()
+            info = self.conn.get_info({'uuid': self.uuid,
+                                       'node': self.instance_node})
+            self._check_vm_info(info, power_state.RUNNING)
+            self.assertTrue(self.exception)
+
     def _spawn_attach_volume_vmdk(self, set_image_ref=True):
         self._create_instance_in_the_db(set_image_ref=set_image_ref)
         self.type_data = db.flavor_get_by_name(None, 'm1.large')
@@ -512,7 +710,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         root_disk = [{'connection_info': connection_info}]
         v_driver.block_device_info_get_mapping(
                 mox.IgnoreArg()).AndReturn(root_disk)
-        mount_point = '/dev/vdc'
         self.mox.StubOutWithMock(volumeops.VMwareVolumeOps,
                                  '_get_res_pool_of_vm')
         volumeops.VMwareVolumeOps._get_res_pool_of_vm(
@@ -1053,7 +1250,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._create_vm()
         connection_info = self._test_vmdk_connection_info('vmdk')
         mount_point = '/dev/vdc'
-        discover = ('fake_name', 'fake_uuid')
 
         # create fake backing info
         volume_device = vmwareapi_fake.DataObject()
@@ -1068,9 +1264,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                  'attach_disk_to_vm')
         volumeops.VMwareVolumeOps.attach_disk_to_vm(mox.IgnoreArg(),
                 self.instance, mox.IgnoreArg(), mox.IgnoreArg(),
-                vmdk_path='fake_path',
-                controller_key=mox.IgnoreArg(),
-                unit_number=mox.IgnoreArg())
+                vmdk_path='fake_path')
         self.mox.ReplayAll()
         self.conn.attach_volume(None, connection_info, self.instance,
                                 mount_point)
@@ -1137,8 +1331,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                  'attach_disk_to_vm')
         volumeops.VMwareVolumeOps.attach_disk_to_vm(mox.IgnoreArg(),
                 self.instance, mox.IgnoreArg(), 'rdmp',
-                controller_key=mox.IgnoreArg(),
-                unit_number=mox.IgnoreArg(),
                 device_name=mox.IgnoreArg())
         self.mox.ReplayAll()
         self.conn.attach_volume(None, connection_info, self.instance,

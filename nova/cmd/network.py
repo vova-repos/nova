@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -44,6 +42,7 @@ def main():
             conductor_rpcapi.ConductorAPI()
 
     server = service.Service.create(binary='nova-network',
-                                    topic=CONF.network_topic)
+                                    topic=CONF.network_topic,
+                                    db_allowed=CONF.conductor.use_local)
     service.serve(server)
     service.wait()

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
@@ -61,7 +59,7 @@ vmwareapi_opts = [
                     'Used only if compute_driver is '
                     'vmwareapi.VMwareVCDriver.'),
     cfg.FloatOpt('task_poll_interval',
-                 default=5.0,
+                 default=0.5,
                  help='The interval used for polling of remote tasks.'),
     cfg.IntOpt('api_retry_count',
                default=10,
@@ -84,16 +82,6 @@ CONF.register_opts(vmwareapi_opts, 'vmware')
 TIME_BETWEEN_API_CALL_RETRIES = 1.0
 
 
-class Failure(Exception):
-    """Base Exception class for handling task failures."""
-
-    def __init__(self, details):
-        self.details = details
-
-    def __str__(self):
-        return str(self.details)
-
-
 class VMwareESXDriver(driver.ComputeDriver):
     """The ESX host connection object."""
 
@@ -103,8 +91,16 @@ class VMwareESXDriver(driver.ComputeDriver):
     # valid vCenter calls. There are some small edge-case
     # exceptions regarding VNC, CIM, User management & SSO.
 
+    def _do_quality_warnings(self):
+        LOG.warning(_('The VMware ESX driver is not tested by the OpenStack '
+                      'project and thus its quality can not be ensured. For '
+                      'more information, see: https://wiki.openstack.org/wiki/'
+                      'HypervisorSupportMatrix'))
+
     def __init__(self, virtapi, read_only=False, scheme="https"):
         super(VMwareESXDriver, self).__init__(virtapi)
+
+        self._do_quality_warnings()
 
         self._host_ip = CONF.vmware.host_ip
         if not (self._host_ip or CONF.vmware.host_username is None or
@@ -331,14 +327,6 @@ class VMwareESXDriver(driver.ComputeDriver):
         """inject network info for specified instance."""
         self._vmops.inject_network_info(instance, network_info)
 
-    def plug_vifs(self, instance, network_info):
-        """Plug VIFs into networks."""
-        self._vmops.plug_vifs(instance, network_info)
-
-    def unplug_vifs(self, instance, network_info):
-        """Unplug VIFs from networks."""
-        self._vmops.unplug_vifs(instance, network_info)
-
     def list_instance_uuids(self):
         """List VM instance UUIDs."""
         uuids = self._vmops.list_instances()
@@ -346,7 +334,7 @@ class VMwareESXDriver(driver.ComputeDriver):
 
 
 class VMwareVCDriver(VMwareESXDriver):
-    """The vCenter connection object."""
+    """The VC host connection object."""
 
     # The vCenter driver includes several additional VMware vSphere
     # capabilities that include API that act on hosts or groups of
@@ -355,6 +343,9 @@ class VMwareVCDriver(VMwareESXDriver):
     # vCenter is not a hypervisor itself, it works with multiple
     # hypervisor host machines and their guests. This fact can
     # subtly alter how vSphere and OpenStack interoperate.
+
+    def _do_quality_warnings(self):
+        pass
 
     def __init__(self, virtapi, read_only=False, scheme="https"):
         super(VMwareVCDriver, self).__init__(virtapi)
@@ -572,7 +563,6 @@ class VMwareVCDriver(VMwareESXDriver):
         self.dict_mors = vm_util.get_all_cluster_refs_by_name(
                                 self._session,
                                 CONF.vmware.cluster_name)
-        nodes = self.dict_mors.keys()
         node_list = []
         self._update_resources()
         for node in self.dict_mors.keys():
@@ -698,16 +688,6 @@ class VMwareVCDriver(VMwareESXDriver):
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.inject_network_info(instance, network_info)
 
-    def plug_vifs(self, instance, network_info):
-        """Plug VIFs into networks."""
-        _vmops = self._get_vmops_for_compute_node(instance['node'])
-        _vmops.plug_vifs(instance, network_info)
-
-    def unplug_vifs(self, instance, network_info):
-        """Unplug VIFs from networks."""
-        _vmops = self._get_vmops_for_compute_node(instance['node'])
-        _vmops.unplug_vifs(instance, network_info)
-
 
 class VMwareAPISession(object):
     """
@@ -792,6 +772,7 @@ class VMwareAPISession(object):
         except Exception as e:
             LOG.warning(_("Unable to validate session %s!"),
                         self._session.key)
+            LOG.debug(_("Exception: %(ex)s"), {'ex': e})
         return active
 
     def _call_method(self, module, method, *args, **kwargs):
@@ -801,8 +782,8 @@ class VMwareAPISession(object):
         """
         args = list(args)
         retry_count = 0
-        exc = None
         while True:
+            exc = None
             try:
                 if not self._is_vim_object(module):
                     # If it is not the first try, then get the latest
@@ -822,7 +803,7 @@ class VMwareAPISession(object):
                 # to a session gone bad. So we try re-creating a session
                 # and then proceeding ahead with the call.
                 exc = excep
-                if error_util.FAULT_NOT_AUTHENTICATED in excep.fault_list:
+                if error_util.NOT_AUTHENTICATED in excep.fault_list:
                     # Because of the idle session returning an empty
                     # RetrievePropertiesResponse and also the same is returned
                     # when there is say empty answer to the query for
@@ -838,6 +819,9 @@ class VMwareAPISession(object):
                     # No re-trying for errors for API call has gone through
                     # and is the caller's fault. Caller should handle these
                     # errors. e.g, InvalidArgument fault.
+                    # Raise specific exceptions here if possible
+                    if excep.fault_list:
+                        raise error_util.get_fault_class(excep.fault_list[0])
                     break
             except error_util.SessionOverLoadException as excep:
                 # For exceptions which may come because of session overload,
@@ -853,6 +837,22 @@ class VMwareAPISession(object):
                 # exceeded, we raise the exception
                 exc = excep
                 break
+
+            LOG.debug(_("_call_method(session=%(key)s) failed. "
+                        "Module: %(module)s. "
+                        "Method: %(method)s. "
+                        "args: %(args)s. "
+                        "kwargs: %(kwargs)s. "
+                        "Iteration: %(n)s. "
+                        "Exception: %(ex)s. "),
+                      {'key': self._session.key,
+                       'module': module,
+                       'method': method,
+                       'args': args,
+                       'kwargs': kwargs,
+                       'n': retry_count,
+                       'ex': exc})
+
             # If retry count has been reached then break and
             # raise the exception
             if retry_count > self._api_retry_count:
@@ -869,6 +869,9 @@ class VMwareAPISession(object):
             self._create_session()
         return self.vim
 
+    def _stop_loop(self, loop):
+        loop.stop()
+
     def _wait_for_task(self, instance_uuid, task_ref):
         """
         Return a Deferred that will give the result of the given task.
@@ -879,8 +882,12 @@ class VMwareAPISession(object):
                                                     instance_uuid,
                                                     task_ref, done)
         loop.start(CONF.vmware.task_poll_interval)
-        ret_val = done.wait()
-        loop.stop()
+        try:
+            ret_val = done.wait()
+        except Exception:
+            raise
+        finally:
+            self._stop_loop(loop)
         return ret_val
 
     def _poll_task(self, instance_uuid, task_ref, done):
@@ -905,7 +912,11 @@ class VMwareAPISession(object):
                           "status: error %(error_info)s"),
                          {'task_name': task_name, 'task_ref': task_ref,
                           'error_info': error_info})
-                done.send_exception(exception.NovaException(error_info))
+                # Check if we can raise a specific exception
+                error = task_info.error
+                name = error.fault.__class__.__name__
+                task_ex = error_util.get_fault_class(name)(error_info)
+                done.send_exception(task_ex)
         except Exception as excep:
             LOG.warn(_("In vmwareapi:_poll_task, Got this error %s") % excep)
             done.send_exception(excep)

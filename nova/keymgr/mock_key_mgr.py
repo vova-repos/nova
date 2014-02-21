@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright (c) 2013 The Johns Hopkins University/Applied Physics Laboratory
 # All Rights Reserved.
 #
@@ -81,13 +80,6 @@ class MockKeyManager(key_mgr.KeyManager):
 
         key = self._generate_key(**kwargs)
         return self.store_key(ctxt, key)
-
-    def _generate_key_id(self):
-        key_id = uuidutils.generate_uuid()
-        while key_id in self.keys:
-            key_id = uuidutils.generate_uuid()
-
-        return key_id
 
     def _generate_key_id(self):
         key_id = uuidutils.generate_uuid()

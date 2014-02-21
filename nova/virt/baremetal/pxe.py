@@ -1,6 +1,4 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
-# Copyright 2012 Hewlett-Packard Development Company, L.P.
+# Copyright 2012,2014 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 NTT DOCOMO, INC.
 # All Rights Reserved.
 #
@@ -34,6 +32,7 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
 from nova.openstack.common import timeutils
+from nova import utils
 from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import base
 from nova.virt.baremetal import db
@@ -57,7 +56,7 @@ pxe_opts = [
     cfg.BoolOpt('use_file_injection',
                 help='If True, enable file injection for network info, '
                 'files and admin password',
-                default=True),
+                default=False),
     cfg.IntOpt('pxe_deploy_timeout',
                 help='Timeout for PXE deployments. Default: 0 (unlimited)',
                 default=0),
@@ -283,7 +282,8 @@ class PXE(base.NodeDriver):
                              target=image_path,
                              image_id=image_meta['id'],
                              user_id=instance['user_id'],
-                             project_id=instance['project_id']
+                             project_id=instance['project_id'],
+                             clean=True,
                         )
 
         return [image_meta['id'], image_path]
@@ -324,7 +324,7 @@ class PXE(base.NodeDriver):
                     image=get_image_file_path(instance),
                     key=ssh_key,
                     net=net_config,
-                    metadata=instance['metadata'],
+                    metadata=utils.instance_meta(instance),
                     admin_password=admin_password,
                     files=injected_files,
                     partition=partition,

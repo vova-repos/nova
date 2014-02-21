@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2012 Hewlett-Packard Development Company, L.P.
@@ -20,6 +19,7 @@
 
 """Tests for the base baremetal driver class."""
 
+import mock
 import mox
 from oslo.config import cfg
 
@@ -28,6 +28,7 @@ from nova.compute import task_states
 from nova import db as main_db
 from nova import exception
 from nova.objects import instance as instance_obj
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.image import fake as fake_image
 from nova.tests import utils
@@ -71,6 +72,10 @@ class BareMetalDriverNoDBTestCase(test.NoDBTestCase):
         self.assertIsInstance(self.driver.volume_driver, fake.FakeVolumeDriver)
         self.assertIsInstance(self.driver.firewall_driver,
                               fake.FakeFirewallDriver)
+
+    def test_driver_capabilities(self):
+        self.assertTrue(self.driver.capabilities['has_imagecache'])
+        self.assertFalse(self.driver.capabilities['supports_recreate'])
 
 
 class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
@@ -189,7 +194,7 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
         self.assertEqual(row['instance_name'], node['instance']['hostname'])
         instance = main_db.instance_get_by_uuid(self.context,
                 node['instance']['uuid'])
-        self.assertEqual(instance['default_ephemeral_device'], None)
+        self.assertIsNone(instance['default_ephemeral_device'])
 
     def _test_rebuild(self, ephemeral):
         node = self._create_node(ephemeral=ephemeral)
@@ -333,6 +338,19 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
         row = db.bm_node_get(self.context, node['node']['id'])
         self.assertEqual(row['task_state'], baremetal_states.ERROR)
 
+    def test_spawn_destroy_images_on_deploy(self):
+        node = self._create_node()
+        self.driver.driver.destroy_images = mock.MagicMock()
+        self.driver.spawn(**node['spawn_params'])
+        row = db.bm_node_get(self.context, node['node']['id'])
+        self.assertEqual(row['task_state'], baremetal_states.ACTIVE)
+        self.assertEqual(row['instance_uuid'], node['instance']['uuid'])
+        self.assertEqual(row['instance_name'], node['instance']['hostname'])
+        instance = main_db.instance_get_by_uuid(self.context,
+                node['instance']['uuid'])
+        self.assertIsNotNone(instance)
+        self.assertEqual(1, self.driver.driver.destroy_images.call_count)
+
     def test_destroy_ok(self):
         node = self._create_node()
         self.driver.spawn(**node['spawn_params'])
@@ -368,6 +386,10 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
         self.assertEqual(resources['memory_mb_used'], 0)
         self.assertEqual(resources['supported_instances'],
                 '[["test", "baremetal", "baremetal"]]')
+        self.assertEqual(resources['stats'],
+                         '{"cpu_arch": "test", "baremetal_driver": '
+                         '"nova.virt.baremetal.fake.FakeDriver", '
+                         '"test_spec": "test_value"}')
 
         self.driver.spawn(**node['spawn_params'])
         resources = self.driver.get_available_resource(node['node']['uuid'])
@@ -377,7 +399,8 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
         self.driver.destroy(**node['destroy_params'])
         resources = self.driver.get_available_resource(node['node']['uuid'])
         self.assertEqual(resources['memory_mb_used'], 0)
-        self.assertEqual(resources['stats']['test_spec'], 'test_value')
+        stats = jsonutils.loads(resources['stats'])
+        self.assertEqual(stats['test_spec'], 'test_value')
 
     def test_get_available_nodes(self):
         self.assertEqual(0, len(self.driver.get_available_nodes()))

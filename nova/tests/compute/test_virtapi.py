@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -58,10 +56,6 @@ class VirtAPIBaseTest(test.NoDBTestCase, test.APICoverage):
     def test_block_device_mapping_get_all_by_instance(self):
         self.assertExpected('block_device_mapping_get_all_by_instance',
                             {'uuid': 'fake_uuid'}, legacy=False)
-
-    def test_block_device_mapping_update(self):
-        self.assertExpected('block_device_mapping_update',
-                            'fake_bdm', 'fake_values')
 
 
 class FakeVirtAPITest(VirtAPIBaseTest):

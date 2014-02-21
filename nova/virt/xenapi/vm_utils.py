@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2010 Citrix Systems, Inc.
 # Copyright 2011 Piston Cloud Computing, Inc.
 # Copyright 2012 OpenStack Foundation
@@ -25,12 +23,12 @@ import contextlib
 import os
 import time
 import urllib
-import urlparse
 import uuid
 from xml.parsers import expat
 
 from eventlet import greenthread
 from oslo.config import cfg
+import six.moves.urllib.parse as urlparse
 
 from nova.api.metadata import base as instance_metadata
 from nova import block_device
@@ -273,6 +271,8 @@ def create_vm(session, instance, name_label, kernel, ramdisk,
         cpu_mask = ",".join(str(cpu_id) for cpu_id in cpu_mask_list)
         vcpu_params["mask"] = cpu_mask
 
+    viridian = 'true' if instance['os_type'] == 'windows' else 'false'
+
     rec = {
         'actions_after_crash': 'destroy',
         'actions_after_reboot': 'restart',
@@ -294,7 +294,7 @@ def create_vm(session, instance, name_label, kernel, ramdisk,
         'other_config': {'nova_uuid': str(instance['uuid'])},
         'PCI_bus': '',
         'platform': {'acpi': 'true', 'apic': 'true', 'pae': 'true',
-                     'viridian': 'true', 'timeoffset': '0'},
+                     'viridian': viridian, 'timeoffset': '0'},
         'PV_args': '',
         'PV_bootloader': '',
         'PV_bootloader_args': '',
@@ -397,8 +397,9 @@ def find_vbd_by_number(session, vm_ref, number):
     if vbd_refs:
         for vbd_ref in vbd_refs:
             try:
-                vbd_rec = session.call_xenapi("VBD.get_record", vbd_ref)
-                if vbd_rec['userdevice'] == str(number):
+                user_device = session.call_xenapi("VBD.get_userdevice",
+                                                  vbd_ref)
+                if user_device == str(number):
                     return vbd_ref
             except session.XenAPI.Failure as exc:
                 LOG.exception(exc)
@@ -561,8 +562,7 @@ def get_vdi_uuid_for_volume(session, connection_data):
     else:
         try:
             vdi_ref = volume_utils.introduce_vdi(session, sr_ref)
-            vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
-            vdi_uuid = vdi_rec['uuid']
+            vdi_uuid = session.call_xenapi("VDI.get_uuid", vdi_ref)
         except volume_utils.StorageError as exc:
             LOG.exception(exc)
             volume_utils.forget_sr(session, sr_ref)
@@ -689,14 +689,15 @@ def _get_vdi_other_config(disk_type, instance=None):
 
 def _set_vdi_info(session, vdi_ref, vdi_type, name_label, description,
                   instance):
-    vdi_rec = session.call_xenapi('VDI.get_record', vdi_ref)
+    existing_other_config = session.call_xenapi('VDI.get_other_config',
+                                                vdi_ref)
 
     session.call_xenapi('VDI.set_name_label', vdi_ref, name_label)
     session.call_xenapi('VDI.set_name_description', vdi_ref, description)
 
     other_config = _get_vdi_other_config(vdi_type, instance=instance)
     for key, value in other_config.iteritems():
-        if key not in vdi_rec['other_config']:
+        if key not in existing_other_config:
             session.call_xenapi(
                     "VDI.add_to_other_config", vdi_ref, key, value)
 
@@ -754,9 +755,8 @@ def _try_strip_base_mirror_from_vdi(session, vdi_ref):
 def strip_base_mirror_from_vdis(session, vm_ref):
     # NOTE(johngarbutt) part of workaround for XenServer bug CA-98606
     vbd_refs = session.call_xenapi("VM.get_VBDs", vm_ref)
-    for vbd in vbd_refs:
-        vbd_rec = session.call_xenapi("VBD.get_record", vbd)
-        vdi_ref = vbd_rec['VDI']
+    for vbd_ref in vbd_refs:
+        vdi_ref = session.call_xenapi("VBD.get_VDI", vbd_ref)
         _try_strip_base_mirror_from_vdi(session, vdi_ref)
 
 
@@ -1210,6 +1210,7 @@ def generate_configdrive(session, instance, vm_ref, userdevice,
                     utils.execute('dd',
                                   'if=%s' % tmp_file,
                                   'of=%s' % dev_path,
+                                  'oflag=direct,sync',
                                   run_as_root=True)
 
         create_vbd(session, vm_ref, vdi_ref, userdevice, bootable=False,
@@ -1278,7 +1279,7 @@ def _get_image_vdi_label(image_id):
 def _create_cached_image(context, session, instance, name_label,
                          image_id, image_type):
     sr_ref = safe_find_sr(session)
-    sr_type = session.call_xenapi('SR.get_record', sr_ref)["type"]
+    sr_type = session.call_xenapi('SR.get_type', sr_ref)
 
     if CONF.use_cow_images and sr_type != "ext":
         LOG.warning(_("Fast cloning is only supported on default local SR "
@@ -1689,12 +1690,12 @@ def set_vm_name_label(session, vm_ref, name_label):
 
 
 def list_vms(session):
-    for vm_ref, vm_rec in session.get_all_refs_and_recs('VM'):
-        if (vm_rec["resident_on"] != session.host_ref or
-                vm_rec["is_a_template"] or vm_rec["is_control_domain"]):
-            continue
-        else:
-            yield vm_ref, vm_rec
+    vms = session.call_xenapi("VM.get_all_records_where",
+                              'field "is_control_domain"="false" and '
+                              'field "is_a_template"="false" and '
+                              'field "resident_on"="%s"' % session.host_ref)
+    for vm_ref in vms.keys():
+        yield vm_ref, vms[vm_ref]
 
 
 def lookup_vm_vdis(session, vm_ref):
@@ -1708,8 +1709,8 @@ def lookup_vm_vdis(session, vm_ref):
             try:
                 vdi_ref = session.call_xenapi("VBD.get_VDI", vbd_ref)
                 # Test valid VDI
-                record = session.call_xenapi("VDI.get_record", vdi_ref)
-                LOG.debug(_('VDI %s is still available'), record['uuid'])
+                vdi_uuid = session.call_xenapi("VDI.get_uuid", vdi_ref)
+                LOG.debug(_('VDI %s is still available'), vdi_uuid)
                 vbd_other_config = session.call_xenapi("VBD.get_other_config",
                                                        vbd_ref)
                 if not vbd_other_config.get('osvol'):
@@ -1998,8 +1999,9 @@ def get_instance_vdis_for_sr(session, vm_ref, sr_ref):
             continue
 
 
-def _get_vhd_parent_uuid(session, vdi_ref):
-    vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
+def _get_vhd_parent_uuid(session, vdi_ref, vdi_rec=None):
+    if vdi_rec is None:
+        vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
 
     if 'vhd-parent' not in vdi_rec['sm_config']:
         return None
@@ -2019,7 +2021,7 @@ def _walk_vdi_chain(session, vdi_uuid):
         vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
         yield vdi_rec
 
-        parent_uuid = _get_vhd_parent_uuid(session, vdi_ref)
+        parent_uuid = _get_vhd_parent_uuid(session, vdi_ref, vdi_rec)
         if not parent_uuid:
             break
 
@@ -2038,13 +2040,29 @@ def _child_vhds(session, sr_ref, vdi_uuid):
         if rec_uuid == vdi_uuid:
             continue
 
-        parent_uuid = _get_vhd_parent_uuid(session, ref)
+        parent_uuid = _get_vhd_parent_uuid(session, ref, rec)
         if parent_uuid != vdi_uuid:
             continue
 
         children.add(rec_uuid)
 
     return children
+
+
+def _another_child_vhd(session, vdi_ref, sr_ref, original_parent_uuid):
+    # Search for any other vdi which parents to original parent and is not
+    # in the active vm/instance vdi chain.
+    vdi_rec = session.call_xenapi('VDI.get_record', vdi_ref)
+    vdi_uuid = vdi_rec['uuid']
+    parent_vdi_uuid = _get_vhd_parent_uuid(session, vdi_ref, vdi_rec)
+    for _ref, rec in _get_all_vdis_in_sr(session, sr_ref):
+        if ((rec['uuid'] != vdi_uuid) and
+            (rec['uuid'] != parent_vdi_uuid) and
+            (rec['sm_config'].get('vhd-parent') == original_parent_uuid)):
+            # Found another vhd which too parents to original parent.
+            return True
+    # Found no other vdi with the same parent.
+    return False
 
 
 def _wait_for_vhd_coalesce(session, instance, sr_ref, vdi_ref,
@@ -2065,33 +2083,24 @@ def _wait_for_vhd_coalesce(session, instance, sr_ref, vdi_ref,
     if not original_parent_uuid:
         return
 
-    def _another_child_vhd():
-        # Search for any other vdi which parents to original parent and is not
-        # in the active vm/instance vdi chain.
-        vdi_uuid = session.call_xenapi('VDI.get_record', vdi_ref)['uuid']
-        parent_vdi_uuid = _get_vhd_parent_uuid(session, vdi_ref)
-        for _ref, rec in _get_all_vdis_in_sr(session, sr_ref):
-            if ((rec['uuid'] != vdi_uuid) and
-               (rec['uuid'] != parent_vdi_uuid) and
-               (rec['sm_config'].get('vhd-parent') == original_parent_uuid)):
-                # Found another vhd which too parents to original parent.
-                return True
-        # Found no other vdi with the same parent.
-        return False
-
     # Check if original parent has any other child. If so, coalesce will
     # not take place.
-    if _another_child_vhd():
+    if _another_child_vhd(session, vdi_ref, sr_ref, original_parent_uuid):
         parent_uuid = _get_vhd_parent_uuid(session, vdi_ref)
         parent_ref = session.call_xenapi("VDI.get_by_uuid", parent_uuid)
         base_uuid = _get_vhd_parent_uuid(session, parent_ref)
         return parent_uuid, base_uuid
+
+    sr_uuid = session.call_xenapi("SR.get_uuid", sr_ref)
 
     max_attempts = CONF.xenserver.vhd_coalesce_max_attempts
     for i in xrange(max_attempts):
         # NOTE(sirp): This rescan is necessary to ensure the VM's `sm_config`
         # matches the underlying VHDs.
         _scan_sr(session, sr_ref)
+        gc_running = session.call_plugin_serialized('xenhost', 'query_gc',
+                                                    sr_uuid=sr_uuid,
+                                                    vdi_uuid=None)
         parent_uuid = _get_vhd_parent_uuid(session, vdi_ref)
         if parent_uuid and (parent_uuid != original_parent_uuid):
             LOG.debug(_("Parent %(parent_uuid)s doesn't match original parent"
@@ -2099,6 +2108,10 @@ def _wait_for_vhd_coalesce(session, instance, sr_ref, vdi_ref,
                       {'parent_uuid': parent_uuid,
                        'original_parent_uuid': original_parent_uuid},
                       instance=instance)
+            if not gc_running:
+                msg = _("VHD coalesce: Garbage collection not running"
+                        ", giving up...")
+                raise exception.NovaException(msg)
         else:
             parent_ref = session.call_xenapi("VDI.get_by_uuid", parent_uuid)
             base_uuid = _get_vhd_parent_uuid(session, parent_ref)
@@ -2151,8 +2164,8 @@ def cleanup_attached_vdis(session):
     vbd_refs = session.call_xenapi('VM.get_VBDs', this_vm_ref)
     for vbd_ref in vbd_refs:
         try:
-            vbd_rec = session.call_xenapi('VBD.get_record', vbd_ref)
-            vdi_rec = session.call_xenapi('VDI.get_record', vbd_rec['VDI'])
+            vdi_ref = session.call_xenapi('VBD.get_VDI', vbd_ref)
+            vdi_rec = session.call_xenapi('VDI.get_record', vdi_ref)
         except session.XenAPI.Failure as e:
             if e.details[0] != 'HANDLE_INVALID':
                 raise
@@ -2189,6 +2202,7 @@ def vdi_attached_here(session, vdi_ref, read_only=False):
             _wait_for_device(dev)
             yield dev
         finally:
+            utils.execute('sync', run_as_root=True)
             LOG.debug(_('Destroying VBD for VDI %s ... '), vdi_ref)
             unplug_vbd(session, vbd_ref, this_vm_ref)
     finally:
@@ -2417,6 +2431,8 @@ def _copy_partition(session, src_ref, dst_ref, partition, virtual_size):
                               'if=%s' % src_path,
                               'of=%s' % dst_path,
                               'count=%d' % num_blocks,
+                              'iflag=direct,sync',
+                              'oflag=direct,sync',
                               run_as_root=True)
 
 
@@ -2706,3 +2722,10 @@ def handle_ipxe_iso(session, instance, cd_vdi, network_info):
                      CONF.xenserver.ipxe_mkisofs_cmd, instance=instance)
         else:
             raise
+
+
+def set_other_config_pci(session, vm_ref, params):
+    """Set the pci key of other-config parameter to params."""
+    other_config = session.call_xenapi("VM.get_other_config", vm_ref)
+    other_config['pci'] = params
+    session.call_xenapi("VM.set_other_config", vm_ref, other_config)

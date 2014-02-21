@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 #
@@ -120,12 +118,20 @@ def mkfs(os_type, fs_label, target, run_as_root=True):
 
 
 def resize2fs(image, check_exit_code=False, run_as_root=False):
-    utils.execute('e2fsck', '-fp', image,
-                  check_exit_code=check_exit_code,
-                  run_as_root=run_as_root)
-    utils.execute('resize2fs', image,
-                  check_exit_code=check_exit_code,
-                  run_as_root=run_as_root)
+    try:
+        utils.execute('e2fsck',
+                      '-fp',
+                      image,
+                      check_exit_code=[0, 1, 2],
+                      run_as_root=run_as_root)
+    except processutils.ProcessExecutionError as exc:
+        LOG.debug(_("Checking the file system with e2fsck has failed, "
+                    "the resize will be aborted. (%s)"), exc)
+    else:
+        utils.execute('resize2fs',
+                      image,
+                      check_exit_code=check_exit_code,
+                      run_as_root=run_as_root)
 
 
 def get_disk_size(path):
@@ -149,18 +155,28 @@ def extend(image, size, use_cow=False):
     if not is_image_partitionless(image, use_cow):
         return
 
+    def safe_resize2fs(dev, run_as_root=False, finally_call=lambda: None):
+        try:
+            resize2fs(dev, run_as_root=run_as_root, check_exit_code=[0])
+        except processutils.ProcessExecutionError as exc:
+            LOG.debug(_("Resizing the file system with resize2fs "
+                        "has failed with error: %s"), exc)
+        finally:
+            finally_call()
+
     # NOTE(vish): attempts to resize filesystem
     if use_cow:
         if CONF.resize_fs_using_block_device:
             # in case of non-raw disks we can't just resize the image, but
             # rather the mounted device instead
-            mounter = mount.Mount.instance_for_format(image, None, None,
-                                                      'qcow2')
+            mounter = mount.Mount.instance_for_format(
+                image, None, None, 'qcow2')
             if mounter.get_dev():
-                resize2fs(mounter.device, run_as_root=True)
-                mounter.unget_dev()
+                safe_resize2fs(mounter.device,
+                               run_as_root=True,
+                               finally_call=mounter.unget_dev)
     else:
-        resize2fs(image)
+        safe_resize2fs(image)
 
 
 def can_resize_image(image, size):

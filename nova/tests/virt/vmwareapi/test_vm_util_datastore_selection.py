@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -112,3 +110,16 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
                          "did not obtain correct freespace!")
         self.assertEqual(987654321, rec[2],
                          "did not obtain correct capacity!")
+
+    def test_filter_datastores_missing_props(self):
+        data = [
+            ['VMFS', 'os-some-name', 987654321, 1234678],
+            ['NFS', 'another-name', 9876543210, 123467890],
+        ]
+        # no matches are expected when 'summary.accessible' is missing
+        prop_names = ['summary.type', 'summary.name',
+                      'summary.capacity', 'summary.freeSpace']
+        datastores = self.build_result_set(data, prop_names)
+
+        rec = vm_util._get_datastore_ref_and_name(datastores)
+        self.assertIsNone(rec, "no matches were expected")

@@ -15,13 +15,13 @@
 """Handles all requests to the conductor service."""
 
 from oslo.config import cfg
+from oslo import messaging
 
 from nova import baserpc
 from nova.conductor import manager
 from nova.conductor import rpcapi
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova.openstack.common.rpc import common as rpc_common
 from nova import utils
 
 conductor_opts = [
@@ -35,7 +35,8 @@ conductor_opts = [
                default='nova.conductor.manager.ConductorManager',
                help='Full class name for the Manager for conductor'),
     cfg.IntOpt('workers',
-               help='Number of workers for OpenStack Conductor service')
+               help='Number of workers for OpenStack Conductor service. '
+                    'The default will be the number of CPUs available.')
 ]
 conductor_group = cfg.OptGroup(name='conductor',
                                title='Conductor Options')
@@ -236,8 +237,8 @@ class LocalAPI(object):
         return self._manager.compute_node_create(context, values)
 
     def compute_node_update(self, context, node, values, prune_stats=False):
-        return self._manager.compute_node_update(context, node, values,
-                                                 prune_stats)
+        # NOTE(belliott) ignore prune_stats param, it's no longer relevant
+        return self._manager.compute_node_update(context, node, values)
 
     def compute_node_delete(self, context, node):
         return self._manager.compute_node_delete(context, node)
@@ -381,7 +382,7 @@ class API(LocalAPI):
                 self.base_rpcapi.ping(context, '1.21 GigaWatts',
                                       timeout=timeout)
                 break
-            except rpc_common.Timeout:
+            except messaging.MessagingTimeout:
                 LOG.warning(_('Timed out waiting for nova-conductor. '
                                 'Is it running? Or did this service start '
                                 'before nova-conductor?'))

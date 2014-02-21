@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright 2013 Canonical Corp.
 # All Rights Reserved.
@@ -19,6 +17,8 @@
 import collections
 import re
 
+import mock
+
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import units
@@ -34,6 +34,13 @@ class fake_session(object):
 
     def _call_method(self, *args):
         return self.ret
+
+    def _get_vim(self):
+        fake_vim = fake.DataObject()
+        client = fake.DataObject()
+        client.factory = 'fake_factory'
+        fake_vim.client = client
+        return fake_vim
 
 
 class partialObject(object):
@@ -71,6 +78,64 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         result = vm_util.get_datastore_ref_and_name(
             fake_session(fake_objects), None, None, datastore_valid_regex)
         self.assertEqual("openstack-ds0", result[1])
+
+    def test_get_stats_from_cluster(self):
+        ManagedObjectRefs = [fake.ManagedObjectReference("host1",
+                                                         "HostSystem"),
+                             fake.ManagedObjectReference("host2",
+                                                         "HostSystem")]
+        hosts = fake._convert_to_array_of_mor(ManagedObjectRefs)
+        respool = fake.ManagedObjectReference("resgroup-11", "ResourcePool")
+        prop_dict = {'host': hosts, 'resourcePool': respool}
+
+        hardware = fake.DataObject()
+        hardware.numCpuCores = 8
+        hardware.numCpuThreads = 16
+        hardware.vendor = "Intel"
+        hardware.cpuModel = "Intel(R) Xeon(R)"
+
+        runtime_host_1 = fake.DataObject()
+        runtime_host_1.connectionState = "connected"
+        runtime_host_2 = fake.DataObject()
+        runtime_host_2.connectionState = "disconnected"
+
+        prop_list_host_1 = [fake.Prop(name="hardware_summary", val=hardware),
+                            fake.Prop(name="runtime_summary",
+                                      val=runtime_host_1)]
+        prop_list_host_2 = [fake.Prop(name="hardware_summary", val=hardware),
+                            fake.Prop(name="runtime_summary",
+                                      val=runtime_host_2)]
+        fake_objects = fake.FakeRetrieveResult()
+        fake_objects.add_object(fake.ObjectContent("prop_list_host1",
+                                                   prop_list_host_1))
+        fake_objects.add_object(fake.ObjectContent("prop_list_host1",
+                                                   prop_list_host_2))
+
+        respool_resource_usage = fake.DataObject()
+        respool_resource_usage.maxUsage = 5368709120
+        respool_resource_usage.overallUsage = 2147483648
+        session = fake_session()
+
+        def fake_call_method(*args):
+            if "get_dynamic_properties" in args:
+                return prop_dict
+            elif "get_properties_for_a_collection_of_objects" in args:
+                return fake_objects
+            else:
+                return respool_resource_usage
+        with mock.patch.object(fake_session, '_call_method',
+                               fake_call_method):
+            result = vm_util.get_stats_from_cluster(session, "cluster1")
+            cpu_info = {}
+            mem_info = {}
+            cpu_info['vcpus'] = 16
+            cpu_info['cores'] = 8
+            cpu_info['vendor'] = ["Intel"]
+            cpu_info['model'] = ["Intel(R) Xeon(R)"]
+            mem_info['total'] = 5120
+            mem_info['free'] = 3072
+            expected_stats = {'cpu': cpu_info, 'mem': mem_info}
+            self.assertEqual(expected_stats, result)
 
     def test_get_datastore_ref_and_name_with_list(self):
         # Test with a regex containing whitelist of datastores
@@ -241,7 +306,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         result = vm_util.get_cdrom_attach_config_spec(fake.FakeFactory(),
                                              fake.Datastore(),
                                              "/tmp/foo.iso",
-                                             0)
+                                             200, 0)
         expected = """{
     'deviceChange': [
         {
@@ -288,21 +353,46 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         self.assertEqual("ns0:VirtualLsiLogicSASController",
                           config_spec.device.obj_name)
 
-    def test_get_vmdk_path_and_adapter_type(self):
+    def _vmdk_path_and_adapter_type_devices(self, filename, parent=None):
         # Test the adapter_type returned for a lsiLogic sas controller
         controller_key = 1000
-        filename = '[test_datastore] test_file.vmdk'
         disk = fake.VirtualDisk()
         disk.controllerKey = controller_key
         disk_backing = fake.VirtualDiskFlatVer2BackingInfo()
         disk_backing.fileName = filename
+        if parent:
+            disk_backing.parent = parent
         disk.backing = disk_backing
         controller = fake.VirtualLsiLogicSASController()
         controller.key = controller_key
         devices = [disk, controller]
+        return devices
+
+    def test_get_vmdk_path_and_adapter_type(self):
+        filename = '[test_datastore] test_file.vmdk'
+        devices = self._vmdk_path_and_adapter_type_devices(filename)
         vmdk_info = vm_util.get_vmdk_path_and_adapter_type(devices)
-        adapter_type = vmdk_info[2]
+        adapter_type = vmdk_info[1]
         self.assertEqual('lsiLogicsas', adapter_type)
+        self.assertEqual(vmdk_info[0], filename)
+
+    def test_get_vmdk_path_and_adapter_type_with_match(self):
+        n_filename = '[test_datastore] uuid/uuid.vmdk'
+        devices = self._vmdk_path_and_adapter_type_devices(n_filename)
+        vmdk_info = vm_util.get_vmdk_path_and_adapter_type(
+                devices, uuid='uuid')
+        adapter_type = vmdk_info[1]
+        self.assertEqual('lsiLogicsas', adapter_type)
+        self.assertEqual(n_filename, vmdk_info[0])
+
+    def test_get_vmdk_path_and_adapter_type_with_nomatch(self):
+        n_filename = '[test_datastore] diuu/diuu.vmdk'
+        devices = self._vmdk_path_and_adapter_type_devices(n_filename)
+        vmdk_info = vm_util.get_vmdk_path_and_adapter_type(
+                devices, uuid='uuid')
+        adapter_type = vmdk_info[1]
+        self.assertEqual('lsiLogicsas', adapter_type)
+        self.assertIsNone(vmdk_info[0])
 
     def test_get_vmdk_adapter_type(self):
         # Test for the adapter_type to be used in vmdk descriptor
@@ -313,6 +403,73 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         self.assertEqual("lsiLogic", vmdk_adapter_type)
         vmdk_adapter_type = vm_util.get_vmdk_adapter_type("dummyAdapter")
         self.assertEqual("dummyAdapter", vmdk_adapter_type)
+
+    def test_find_allocated_slots(self):
+        disk1 = fake.VirtualDisk(200, 0)
+        disk2 = fake.VirtualDisk(200, 1)
+        disk3 = fake.VirtualDisk(201, 1)
+        ide0 = fake.VirtualIDEController(200)
+        ide1 = fake.VirtualIDEController(201)
+        scsi0 = fake.VirtualLsiLogicController(key=1000, scsiCtlrUnitNumber=7)
+        devices = [disk1, disk2, disk3, ide0, ide1, scsi0]
+        taken = vm_util._find_allocated_slots(devices)
+        self.assertEqual([0, 1], sorted(taken[200]))
+        self.assertEqual([1], taken[201])
+        self.assertEqual([7], taken[1000])
+
+    def test_allocate_controller_key_and_unit_number_ide_default(self):
+        # Test that default IDE controllers are used when there is a free slot
+        # on them
+        disk1 = fake.VirtualDisk(200, 0)
+        disk2 = fake.VirtualDisk(200, 1)
+        ide0 = fake.VirtualIDEController(200)
+        ide1 = fake.VirtualIDEController(201)
+        devices = [disk1, disk2, ide0, ide1]
+        (controller_key, unit_number,
+         controller_spec) = vm_util.allocate_controller_key_and_unit_number(
+                                                            None,
+                                                            devices,
+                                                            'ide')
+        self.assertEqual(201, controller_key)
+        self.assertEqual(0, unit_number)
+        self.assertIsNone(controller_spec)
+
+    def test_allocate_controller_key_and_unit_number_ide(self):
+        # Test that a new controller is created when there is no free slot on
+        # the default IDE controllers
+        ide0 = fake.VirtualIDEController(200)
+        ide1 = fake.VirtualIDEController(201)
+        devices = [ide0, ide1]
+        for controller_key in [200, 201]:
+            for unit_number in [0, 1]:
+                disk = fake.VirtualDisk(controller_key, unit_number)
+                devices.append(disk)
+        factory = fake.FakeFactory()
+        (controller_key, unit_number,
+         controller_spec) = vm_util.allocate_controller_key_and_unit_number(
+                                                            factory,
+                                                            devices,
+                                                            'ide')
+        self.assertEqual(-101, controller_key)
+        self.assertEqual(0, unit_number)
+        self.assertIsNotNone(controller_spec)
+
+    def test_allocate_controller_key_and_unit_number_scsi(self):
+        # Test that we allocate on existing SCSI controller if there is a free
+        # slot on it
+        devices = [fake.VirtualLsiLogicController(1000, scsiCtlrUnitNumber=7)]
+        for unit_number in range(7):
+            disk = fake.VirtualDisk(1000, unit_number)
+            devices.append(disk)
+        factory = fake.FakeFactory()
+        (controller_key, unit_number,
+         controller_spec) = vm_util.allocate_controller_key_and_unit_number(
+                                                            factory,
+                                                            devices,
+                                                            'lsiLogic')
+        self.assertEqual(1000, controller_key)
+        self.assertEqual(8, unit_number)
+        self.assertIsNone(controller_spec)
 
     def _test_get_vnc_config_spec(self, port):
 

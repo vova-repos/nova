@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # Copyright 2011 Piston Cloud Computing, Inc.
@@ -51,9 +49,9 @@ from nova.network import model as network_model
 from nova.network.security_group import openstack_driver
 from nova.network.security_group import security_group_base
 from nova import notifications
-from nova import notifier
 from nova.objects import aggregate as aggregate_obj
 from nova.objects import base as obj_base
+from nova.objects import block_device as block_device_obj
 from nova.objects import flavor as flavor_obj
 from nova.objects import instance as instance_obj
 from nova.objects import instance_action
@@ -70,13 +68,14 @@ from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 import nova.policy
 from nova import quota
+from nova import rpc
 from nova import servicegroup
 from nova import utils
 from nova import volume
 
 LOG = logging.getLogger(__name__)
 
-get_notifier = functools.partial(notifier.get_notifier, service='compute')
+get_notifier = functools.partial(rpc.get_notifier, service='compute')
 wrap_exception = functools.partial(exception.wrap_exception,
                                    get_notifier=get_notifier)
 
@@ -252,7 +251,7 @@ class API(base.Base):
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self._compute_task_api = None
         self.servicegroup_api = servicegroup.API()
-        self.notifier = notifier.get_notifier('compute', CONF.host)
+        self.notifier = rpc.get_notifier('compute', CONF.host)
 
         super(API, self).__init__(**kwargs)
 
@@ -625,15 +624,40 @@ class API(base.Base):
         # Get the block device mappings defined by the image.
         image_defined_bdms = \
             image_meta.get('properties', {}).get('block_device_mapping', [])
+        legacy_image_defined = not image_meta.get(
+                'properties', {}).get('bdm_v2', False)
+
+        if not legacy_image_defined:
+            image_defined_bdms = map(block_device.BlockDeviceDict,
+                                     image_defined_bdms)
 
         if legacy_bdm:
+            if legacy_image_defined:
+                block_device_mapping += image_defined_bdms
+                block_device_mapping = block_device.from_legacy_mapping(
+                     block_device_mapping, image_ref, root_device_name)
+            else:
+                root_in_image_bdms = block_device.get_root_bdm(
+                        image_defined_bdms) is not None
+                block_device_mapping = block_device.from_legacy_mapping(
+                     block_device_mapping, image_ref, root_device_name,
+                     no_root=root_in_image_bdms) + image_defined_bdms
+        else:
+            # NOTE (ndipanov): client will insert an image mapping into the v2
+            # block_device_mapping, but if there is a bootable device in image
+            # mappings - we need to get rid of the inserted image.
+            if legacy_image_defined:
+                image_defined_bdms = block_device.from_legacy_mapping(
+                    image_defined_bdms, None, root_device_name)
+            root_in_image_bdms = block_device.get_root_bdm(
+                    image_defined_bdms) is not None
+            if image_ref and root_in_image_bdms:
+                block_device_mapping = [bdm for bdm in block_device_mapping
+                                        if not (
+                                            bdm.get('source_type') == 'image'
+                                            and bdm.get('boot_index') == 0)]
+
             block_device_mapping += image_defined_bdms
-            block_device_mapping = block_device.from_legacy_mapping(
-                 block_device_mapping, image_ref, root_device_name)
-        elif image_defined_bdms:
-            # NOTE (ndipanov): For now assume that image mapping is legacy
-            block_device_mapping += block_device.from_legacy_mapping(
-                image_defined_bdms, None, root_device_name)
 
         if min_count > 1 or max_count > 1:
             if any(map(lambda bdm: bdm['source_type'] == 'volume',
@@ -1346,6 +1370,25 @@ class API(base.Base):
         else:
             user_id = context.user_id
 
+        # At these states an instance has a snapshot associate.
+        if instance['vm_state'] in (vm_states.SHELVED,
+                                    vm_states.SHELVED_OFFLOADED):
+            snapshot_id = instance.system_metadata.get('shelved_image_id')
+            LOG.info(_("Working on deleting snapshot %s "
+                       "from shelved instance..."),
+                     snapshot_id, instance=instance)
+            try:
+                self.image_service.delete(context, snapshot_id)
+            except (exception.ImageNotFound,
+                    exception.ImageNotAuthorized) as exc:
+                LOG.warning(_("Failed to delete snapshot "
+                              "from shelved instance (%s)."),
+                            exc.format_message(), instance=instance)
+            except Exception as exc:
+                LOG.exception(_("Something wrong happened when trying to "
+                                "delete snapshot from shelved instance."),
+                              instance=instance)
+
         original_task_state = instance.task_state
 
         try:
@@ -1675,7 +1718,6 @@ class API(base.Base):
 
         self.compute_rpcapi.stop_instance(context, instance, do_cast=do_cast)
 
-    @wrap_check_policy
     @check_instance_lock
     @check_instance_host
     @check_instance_cell
@@ -1686,7 +1728,6 @@ class API(base.Base):
         """Stop an instance."""
         self.force_stop(context, instance, do_cast)
 
-    @wrap_check_policy
     @check_instance_lock
     @check_instance_host
     @check_instance_cell
@@ -1703,18 +1744,6 @@ class API(base.Base):
         #                 It is used only for osapi. not for ec2 api.
         #                 availability_zone isn't used by run_instance.
         self.compute_rpcapi.start_instance(context, instance)
-
-    #NOTE(bcwaldon): no policy check here since it should be rolled in to
-    # search_opts in get_all
-    def get_active_by_window(self, context, begin, end=None, project_id=None):
-        """Get instances that were continuously active over a window."""
-        return self.db.instance_get_active_by_window_joined(context, begin,
-                                                     end, project_id)
-
-    #NOTE(bcwaldon): this doesn't really belong in this class
-    def get_instance_type(self, context, instance_type_id):
-        """Get an instance type by instance type id."""
-        return flavors.get_flavor(instance_type_id, ctxt=context)
 
     def get(self, context, instance_id, want_objects=False,
             expected_attrs=None):
@@ -1962,57 +1991,41 @@ class API(base.Base):
             properties['root_device_name'] = instance['root_device_name']
         properties.update(extra_properties or {})
 
-        # TODO(xqueralt): Use new style BDM in volume snapshots
-        bdms = self.get_instance_bdms(context, instance)
+        bdms = block_device_obj.BlockDeviceMappingList.get_by_instance_uuid(
+                context, instance['uuid'])
 
         mapping = []
         for bdm in bdms:
-            if bdm['no_device']:
+            if bdm.no_device:
                 continue
 
-            # Clean the BDM of the database related fields to prevent
-            # duplicates in the future (e.g. the id was being preserved)
-            for field in block_device.BlockDeviceDict._db_only_fields:
-                bdm.pop(field, None)
-
-            volume_id = bdm.get('volume_id')
-            if volume_id:
+            if bdm.is_volume:
                 # create snapshot based on volume_id
-                volume = self.volume_api.get(context, volume_id)
+                volume = self.volume_api.get(context, bdm.volume_id)
                 # NOTE(yamahata): Should we wait for snapshot creation?
                 #                 Linux LVM snapshot creation completes in
                 #                 short time, it doesn't matter for now.
                 name = _('snapshot for %s') % image_meta['name']
                 snapshot = self.volume_api.create_snapshot_force(
                     context, volume['id'], name, volume['display_description'])
-                bdm['snapshot_id'] = snapshot['id']
+                mapping_dict = block_device.snapshot_from_bdm(snapshot['id'],
+                                                              bdm)
+                mapping_dict = mapping_dict.get_image_mapping()
+            else:
+                mapping_dict = bdm.get_image_mapping()
 
-                # Clean the extra volume related fields that will be generated
-                # when booting from the new snapshot.
-                bdm.pop('volume_id')
-                bdm.pop('connection_info')
+            mapping.append(mapping_dict)
 
-            mapping.append(bdm)
-
-        for m in block_device.mappings_prepend_dev(properties.get('mappings',
-                                                                  [])):
-            virtual_name = m['virtual']
-            if virtual_name in ('ami', 'root'):
-                continue
-
-            assert block_device.is_swap_or_ephemeral(virtual_name)
-            device_name = m['device']
-            if device_name in [b['device_name'] for b in mapping
-                               if not b.get('no_device', False)]:
-                continue
-
-            # NOTE(yamahata): swap and ephemeral devices are specified in
-            #                 AMI, but disabled for this instance by user.
-            #                 So disable those device by no_device.
-            mapping.append({'device_name': device_name, 'no_device': True})
-
+        # NOTE (ndipanov): Remove swap/ephemerals from mappings as they will be
+        # in the block_device_mapping for the new image.
+        image_mappings = properties.get('mappings')
+        if image_mappings:
+            properties['mappings'] = [m for m in image_mappings
+                                      if not block_device.is_swap_or_ephemeral(
+                                          m['virtual'])]
         if mapping:
             properties['block_device_mapping'] = mapping
+            properties['bdm_v2'] = True
 
         for attr in ('status', 'location', 'id'):
             image_meta.pop(attr, None)
@@ -2519,14 +2532,12 @@ class API(base.Base):
     def rescue(self, context, instance, rescue_password=None):
         """Rescue the given instance."""
 
-        bdms = self.get_instance_bdms(context, instance, legacy=False)
+        bdms = block_device_obj.BlockDeviceMappingList.get_by_instance_uuid(
+                    context, instance['uuid'])
         for bdm in bdms:
-            if bdm['volume_id']:
-                volume = self.volume_api.get(context, bdm['volume_id'])
-                self.volume_api.check_attached(context, volume)
-        # TODO(ndipanov): This check can be generalized as a decorator to
-        # check for valid combinations of src and dests - for now check
-        # if it's booted from volume only
+            if bdm.volume_id:
+                vol = self.volume_api.get(context, bdm.volume_id)
+                self.volume_api.check_attached(context, vol)
         if self.is_volume_backed_instance(context, instance, bdms):
             reason = _("Cannot rescue a volume-backed instance")
             raise exception.InstanceNotRescuable(instance_id=instance['uuid'],
@@ -2618,6 +2629,26 @@ class API(base.Base):
     def get_spice_connect_info(self, context, instance, console_type):
         """Used in a child cell to get console info."""
         connect_info = self.compute_rpcapi.get_spice_console(context,
+                instance=instance, console_type=console_type)
+        return connect_info
+
+    @wrap_check_policy
+    @check_instance_host
+    def get_rdp_console(self, context, instance, console_type):
+        """Get a url to an instance Console."""
+        connect_info = self.compute_rpcapi.get_rdp_console(context,
+                instance=instance, console_type=console_type)
+        self.consoleauth_rpcapi.authorize_console(context,
+                connect_info['token'], console_type,
+                connect_info['host'], connect_info['port'],
+                connect_info['internal_access_path'], instance['uuid'])
+
+        return {'url': connect_info['access_url']}
+
+    @check_instance_host
+    def get_rdp_connect_info(self, context, instance, console_type):
+        """Used in a child cell to get console info."""
+        connect_info = self.compute_rpcapi.get_rdp_console(context,
                 instance=instance, console_type=console_type)
         return connect_info
 
@@ -2862,9 +2893,7 @@ class API(base.Base):
                           task_state=None)
     def delete_instance_metadata(self, context, instance, key):
         """Delete the given metadata item from an instance."""
-        self.db.instance_metadata_delete(context, instance['uuid'], key)
-        instance['metadata'] = {}
-        notifications.send_update(context, instance, instance)
+        instance.delete_metadata_key(key)
         self.compute_rpcapi.change_instance_metadata(context,
                                                      instance=instance,
                                                      diff={key: ['-']})
@@ -2882,19 +2911,17 @@ class API(base.Base):
         `metadata` argument will be deleted.
 
         """
-        orig = self.get_instance_metadata(context, instance)
+        orig = dict(instance.metadata)
         if delete:
             _metadata = metadata
         else:
-            _metadata = orig.copy()
+            _metadata = dict(instance.metadata)
             _metadata.update(metadata)
 
         self._check_metadata_properties_quota(context, _metadata)
-        metadata = self.db.instance_metadata_update(context, instance['uuid'],
-                                         _metadata, True)
-        instance['metadata'] = metadata
-        notifications.send_update(context, instance, instance)
-        diff = _diff_dict(orig, _metadata)
+        instance.metadata = _metadata
+        instance.save()
+        diff = _diff_dict(orig, instance.metadata)
         self.compute_rpcapi.change_instance_metadata(context,
                                                      instance=instance,
                                                      diff=diff)
@@ -2925,12 +2952,13 @@ class API(base.Base):
             return True
 
         if bdms is None:
-            bdms = self.get_instance_bdms(context, instance, legacy=False)
+            bdms = block_device_obj.BlockDeviceMappingList.\
+                        get_by_instance_uuid(context, instance['uuid'])
 
-        root_bdm = block_device.get_root_bdm(bdms)
-        if root_bdm and root_bdm.get('destination_type') == 'volume':
-                return True
-        return False
+        root_bdm = bdms.root_bdm()
+        if not root_bdm:
+            return False
+        return root_bdm.is_volume
 
     @check_instance_cell
     @check_instance_state(vm_state=[vm_states.ACTIVE])
@@ -2993,9 +3021,9 @@ class API(base.Base):
 
     @wrap_check_policy
     def volume_snapshot_create(self, context, volume_id, create_info):
-        bdm = self.db.block_device_mapping_get_by_volume_id(context,
-                volume_id, ['instance'])
-        self.compute_rpcapi.volume_snapshot_create(context, bdm['instance'],
+        bdm = block_device_obj.BlockDeviceMapping.get_by_volume_id(
+                context, volume_id, ['instance'])
+        self.compute_rpcapi.volume_snapshot_create(context, bdm.instance,
                 volume_id, create_info)
         snapshot = {
             'snapshot': {
@@ -3008,9 +3036,9 @@ class API(base.Base):
     @wrap_check_policy
     def volume_snapshot_delete(self, context, volume_id, snapshot_id,
                                delete_info):
-        bdm = self.db.block_device_mapping_get_by_volume_id(context,
-                volume_id, ['instance'])
-        self.compute_rpcapi.volume_snapshot_delete(context, bdm['instance'],
+        bdm = block_device_obj.BlockDeviceMapping.get_by_volume_id(
+                context, volume_id, ['instance'])
+        self.compute_rpcapi.volume_snapshot_delete(context, bdm.instance,
                 volume_id, snapshot_id, delete_info)
 
 
@@ -3202,16 +3230,35 @@ class AggregateAPI(base.Base):
         aggregates = aggregate_obj.AggregateList.get_all(context)
         return [self._reformat_aggregate_info(agg) for agg in aggregates]
 
+    def is_safe_to_update_az(self, context, aggregate, metadata,
+                                action_name):
+        """Determine if updates alter an aggregate's availability zone."""
+        if 'availability_zone' in metadata:
+            aggregate_az = aggregate.metadata.get("availability_zone")
+            for host in aggregate.hosts:
+                host_az = availability_zones.get_host_availability_zone(
+                                                    context, host)
+                if (host_az and host_az != metadata["availability_zone"]
+                   and host_az != CONF.default_availability_zone and
+                   host_az != aggregate_az):
+                    msg = _("This aggregate contains hosts in"
+                            " an existing availability zone")
+                    raise exception.InvalidAggregateAction(
+                                            action=action_name,
+                                            aggregate_id=aggregate.id,
+                                            reason=msg)
+
     @wrap_exception()
     def update_aggregate(self, context, aggregate_id, values):
         """Update the properties of an aggregate."""
         aggregate = aggregate_obj.Aggregate.get_by_id(context, aggregate_id)
         if 'name' in values:
             aggregate.name = values.pop('name')
+        self.is_safe_to_update_az(context, aggregate,
+                                    values, "update aggregate")
         if values:
             aggregate.metadata = values
         aggregate.save()
-
         # If updated values include availability_zones, then the cache
         # which stored availability_zones and host need to be reset
         if values.get('availability_zone'):
@@ -3222,7 +3269,13 @@ class AggregateAPI(base.Base):
     def update_aggregate_metadata(self, context, aggregate_id, metadata):
         """Updates the aggregate metadata."""
         aggregate = aggregate_obj.Aggregate.get_by_id(context, aggregate_id)
+        self.is_safe_to_update_az(context, aggregate,
+                         metadata, "update aggregate metadata")
         aggregate.update_metadata(metadata)
+        # If updated metadata include availability_zones, then the cache
+        # which stored availability_zones and host need to be reset
+        if metadata and metadata.get('availability_zone'):
+            availability_zones.reset_cache()
         return aggregate
 
     @wrap_exception()
@@ -3260,6 +3313,14 @@ class AggregateAPI(base.Base):
                     action=action_name, aggregate_id=aggregate_id,
                     reason=msg)
 
+    def _update_az_cache_for_host(self, context, host_name, aggregate_meta):
+        # Update the availability_zone cache to avoid getting wrong
+        # availability_zone in cache retention time when add/remove
+        # host to/from aggregate.
+        if aggregate_meta and aggregate_meta.get('availability_zone'):
+            availability_zones.update_host_availability_zone_cache(context,
+                                                                   host_name)
+
     @wrap_exception()
     def add_host_to_aggregate(self, context, aggregate_id, host_name):
         """Adds the host to an aggregate."""
@@ -3279,6 +3340,7 @@ class AggregateAPI(base.Base):
                 self._check_az_for_host(aggregate_meta, host_az, aggregate_id)
         aggregate = aggregate_obj.Aggregate.get_by_id(context, aggregate_id)
         aggregate.add_host(context, host_name)
+        self._update_az_cache_for_host(context, host_name, aggregate.metadata)
         #NOTE(jogo): Send message to host to support resource pools
         self.compute_rpcapi.add_aggregate_host(context,
                 aggregate=aggregate, host_param=host_name, host=host_name)
@@ -3300,6 +3362,7 @@ class AggregateAPI(base.Base):
         service_obj.Service.get_by_compute_host(context, host_name)
         aggregate = aggregate_obj.Aggregate.get_by_id(context, aggregate_id)
         aggregate.delete_host(host_name)
+        self._update_az_cache_for_host(context, host_name, aggregate.metadata)
         self.compute_rpcapi.remove_aggregate_host(context,
                 aggregate=aggregate, host_param=host_name, host=host_name)
         compute_utils.notify_about_aggregate_update(context,
@@ -3315,13 +3378,17 @@ class AggregateAPI(base.Base):
 class KeypairAPI(base.Base):
     """Subset of the Compute Manager API for managing key pairs."""
 
+    get_notifier = functools.partial(rpc.get_notifier, service='api')
+    wrap_exception = functools.partial(exception.wrap_exception,
+                                       get_notifier=get_notifier)
+
     def _notify(self, context, event_suffix, keypair_name):
         payload = {
             'tenant_id': context.project_id,
             'user_id': context.user_id,
             'key_name': keypair_name,
         }
-        notify = notifier.get_notifier(service='api')
+        notify = self.get_notifier()
         notify.info(context, 'keypair.%s' % event_suffix, payload)
 
     def _validate_new_key_pair(self, context, user_id, key_name):
@@ -3342,7 +3409,7 @@ class KeypairAPI(base.Base):
         except exception.OverQuota:
             raise exception.KeypairLimitExceeded()
 
-    @exception.wrap_exception(notifier=notifier.get_notifier(service='api'))
+    @wrap_exception()
     def import_key_pair(self, context, user_id, key_name, public_key):
         """Import a key pair using an existing public key."""
         self._validate_new_key_pair(context, user_id, key_name)
@@ -3362,7 +3429,7 @@ class KeypairAPI(base.Base):
 
         return keypair
 
-    @exception.wrap_exception(notifier=notifier.get_notifier(service='api'))
+    @wrap_exception()
     def create_key_pair(self, context, user_id, key_name):
         """Create a new key pair."""
         self._validate_new_key_pair(context, user_id, key_name)
@@ -3382,7 +3449,7 @@ class KeypairAPI(base.Base):
 
         return keypair, private_key
 
-    @exception.wrap_exception(notifier=notifier.get_notifier(service='api'))
+    @wrap_exception()
     def delete_key_pair(self, context, user_id, key_name):
         """Delete a keypair by name."""
         self._notify(context, 'delete.start', key_name)

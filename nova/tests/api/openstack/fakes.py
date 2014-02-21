@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -554,6 +552,7 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         "vcpus": 0,
         "root_gb": 0,
         "ephemeral_gb": 0,
+        "ephemeral_key_uuid": None,
         "hostname": display_name or server_name,
         "host": host,
         "node": node,

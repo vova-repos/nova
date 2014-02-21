@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010-2011 OpenStack Foundation
 # Copyright 2011 Piston Cloud Computing, Inc.
 # All Rights Reserved.
@@ -20,13 +18,13 @@
 import base64
 import datetime
 import testtools
-import urlparse
 import uuid
 
 import iso8601
 from lxml import etree
 import mox
 from oslo.config import cfg
+import six.moves.urllib.parse as urlparse
 import webob
 
 from nova.api.openstack import compute

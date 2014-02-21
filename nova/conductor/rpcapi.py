@@ -1,4 +1,5 @@
 #    Copyright 2013 IBM Corp.
+#    Copyright 2013 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -15,11 +16,11 @@
 """Client side of the conductor RPC API."""
 
 from oslo.config import cfg
+from oslo import messaging
 
 from nova.objects import base as objects_base
 from nova.openstack.common import jsonutils
-from nova.openstack.common.rpc import common as rpc_common
-from nova import rpcclient
+from nova import rpc
 
 CONF = cfg.CONF
 
@@ -28,7 +29,7 @@ rpcapi_cap_opt = cfg.StrOpt('conductor',
 CONF.register_opt(rpcapi_cap_opt, 'upgrade_levels')
 
 
-class ConductorAPI(rpcclient.RpcProxy):
+class ConductorAPI(object):
     """Client side of the conductor RPC API
 
     API version history:
@@ -121,9 +122,9 @@ class ConductorAPI(rpcclient.RpcProxy):
            security_group_rule_get_by_security_group()
     1.61 - Return deleted instance from instance_destroy()
     1.62 - Added object_backport()
+    1.63 - Changed the format of values['stats'] from a dict to a JSON string
+           in compute_node_update()
     """
-
-    BASE_RPC_API_VERSION = '1.0'
 
     VERSION_ALIASES = {
         'grizzly': '1.48',
@@ -131,14 +132,14 @@ class ConductorAPI(rpcclient.RpcProxy):
     }
 
     def __init__(self):
+        super(ConductorAPI, self).__init__()
+        target = messaging.Target(topic=CONF.conductor.topic, version='1.0')
         version_cap = self.VERSION_ALIASES.get(CONF.upgrade_levels.conductor,
                                                CONF.upgrade_levels.conductor)
-        super(ConductorAPI, self).__init__(
-            topic=CONF.conductor.topic,
-            default_version=self.BASE_RPC_API_VERSION,
-            serializer=objects_base.NovaObjectSerializer(),
-            version_cap=version_cap)
-        self.client = self.get_client()
+        serializer = objects_base.NovaObjectSerializer()
+        self.client = rpc.get_client(target,
+                                     version_cap=version_cap,
+                                     serializer=serializer)
 
     def instance_update(self, context, instance_uuid, updates,
                         service=None):
@@ -255,7 +256,8 @@ class ConductorAPI(rpcclient.RpcProxy):
         else:
             # If we require new style data, but can't ask for it, then we must
             # fail here.
-            raise rpc_common.RpcVersionCapError(version_cap=self.version_cap)
+            raise messaging.RPCVersionCapError(
+                vesion='1.51', version_cap=self.client.version_cap)
 
         cctxt = self.client.prepare(version=version)
         return cctxt.call(context, 'block_device_mapping_get_all_by_instance',
@@ -358,7 +360,13 @@ class ConductorAPI(rpcclient.RpcProxy):
 
     def compute_node_update(self, context, node, values, prune_stats=False):
         node_p = jsonutils.to_primitive(node)
-        cctxt = self.client.prepare(version='1.33')
+        if self.client.can_send_version('1.63'):
+            version = '1.63'
+        else:
+            version = '1.33'
+            if 'stats' in values:
+                values['stats'] = jsonutils.loads(values['stats'])
+        cctxt = self.client.prepare(version=version)
         return cctxt.call(context, 'compute_node_update',
                           node=node_p, values=values,
                           prune_stats=prune_stats)
@@ -480,7 +488,7 @@ class ConductorAPI(rpcclient.RpcProxy):
                           target_version=target_version)
 
 
-class ComputeTaskAPI(rpcclient.RpcProxy):
+class ComputeTaskAPI(object):
     """Client side of the conductor 'compute' namespaced RPC API
 
     API version history:
@@ -494,15 +502,13 @@ class ComputeTaskAPI(rpcclient.RpcProxy):
     1.6 - Made migrate_server use instance objects
     """
 
-    BASE_RPC_API_VERSION = '1.0'
-    RPC_API_NAMESPACE = 'compute_task'
-
     def __init__(self):
-        super(ComputeTaskAPI, self).__init__(
-                topic=CONF.conductor.topic,
-                default_version=self.BASE_RPC_API_VERSION,
-                serializer=objects_base.NovaObjectSerializer())
-        self.client = self.get_client(namespace=self.RPC_API_NAMESPACE)
+        super(ComputeTaskAPI, self).__init__()
+        target = messaging.Target(topic=CONF.conductor.topic,
+                                  namespace='compute_task',
+                                  version='1.0')
+        serializer = objects_base.NovaObjectSerializer()
+        self.client = rpc.get_client(target, serializer=serializer)
 
     def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
                   flavor, block_migration, disk_over_commit,

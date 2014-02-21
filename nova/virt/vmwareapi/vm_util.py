@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
@@ -205,7 +203,6 @@ def create_network_spec(client_factory, vif_info):
 
 
 def get_vmdk_attach_config_spec(client_factory,
-                                adapter_type="lsiLogic",
                                 disk_type="preallocated",
                                 file_path=None,
                                 disk_size=None,
@@ -216,20 +213,7 @@ def get_vmdk_attach_config_spec(client_factory,
     """Builds the vmdk attach config spec."""
     config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
 
-    # The controller Key pertains to the Key of the LSI Logic Controller, which
-    # controls this Hard Disk
     device_config_spec = []
-    # For IDE devices, there are these two default controllers created in the
-    # VM having keys 200 and 201
-    if controller_key is None:
-        if adapter_type == "ide":
-            controller_key = 200
-        else:
-            controller_key = -101
-            controller_spec = create_controller_spec(client_factory,
-                                                     controller_key,
-                                                     adapter_type)
-            device_config_spec.append(controller_spec)
     virtual_device_config_spec = create_virtual_disk_spec(client_factory,
                                 controller_key, disk_type, file_path,
                                 disk_size, linked_clone,
@@ -244,14 +228,12 @@ def get_vmdk_attach_config_spec(client_factory,
 def get_cdrom_attach_config_spec(client_factory,
                                  datastore,
                                  file_path,
+                                 controller_key,
                                  cdrom_unit_number):
     """Builds and returns the cdrom attach config spec."""
     config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
 
     device_config_spec = []
-    # For IDE devices, there are these two default controllers created in the
-    # VM having keys 200 and 201
-    controller_key = 200
     virtual_device_config_spec = create_virtual_cdrom_spec(client_factory,
                                                            datastore,
                                                            controller_key,
@@ -294,21 +276,24 @@ def get_vm_extra_config_spec(client_factory, extra_opts):
     return config_spec
 
 
-def get_vmdk_path_and_adapter_type(hardware_devices):
+def get_vmdk_path_and_adapter_type(hardware_devices, uuid=None):
     """Gets the vmdk file path and the storage adapter type."""
     if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
         hardware_devices = hardware_devices.VirtualDevice
     vmdk_file_path = None
     vmdk_controller_key = None
     disk_type = None
-    unit_number = 0
 
     adapter_type_dict = {}
     for device in hardware_devices:
         if device.__class__.__name__ == "VirtualDisk":
             if device.backing.__class__.__name__ == \
                     "VirtualDiskFlatVer2BackingInfo":
-                vmdk_file_path = device.backing.fileName
+                if uuid:
+                    if uuid in device.backing.fileName:
+                        vmdk_file_path = device.backing.fileName
+                else:
+                    vmdk_file_path = device.backing.fileName
                 vmdk_controller_key = device.controllerKey
                 if getattr(device.backing, 'thinProvisioned', False):
                     disk_type = "thin"
@@ -317,8 +302,6 @@ def get_vmdk_path_and_adapter_type(hardware_devices):
                         disk_type = "eagerZeroedThick"
                     else:
                         disk_type = "preallocated"
-            if device.unitNumber > unit_number:
-                unit_number = device.unitNumber
         elif device.__class__.__name__ == "VirtualLsiLogicController":
             adapter_type_dict[device.key] = "lsiLogic"
         elif device.__class__.__name__ == "VirtualBusLogicController":
@@ -330,8 +313,70 @@ def get_vmdk_path_and_adapter_type(hardware_devices):
 
     adapter_type = adapter_type_dict.get(vmdk_controller_key, "")
 
-    return (vmdk_file_path, vmdk_controller_key, adapter_type,
-            disk_type, unit_number)
+    return (vmdk_file_path, adapter_type, disk_type)
+
+
+def _find_controller_slot(controller_keys, taken, max_unit_number):
+    for controller_key in controller_keys:
+        for unit_number in range(max_unit_number):
+            if not unit_number in taken.get(controller_key, []):
+                return controller_key, unit_number
+
+
+def _is_ide_controller(device):
+    return device.__class__.__name__ == 'VirtualIDEController'
+
+
+def _is_scsi_controller(device):
+    return device.__class__.__name__ in ['VirtualLsiLogicController',
+                                         'VirtualLsiLogicSASController',
+                                         'VirtualBusLogicController']
+
+
+def _find_allocated_slots(devices):
+    """
+    Return dictionary which maps controller_key to list of allocated unit
+    numbers for that controller_key.
+    """
+    taken = {}
+    for device in devices:
+        if hasattr(device, 'controllerKey') and hasattr(device, 'unitNumber'):
+            unit_numbers = taken.setdefault(device.controllerKey, [])
+            unit_numbers.append(device.unitNumber)
+        if _is_scsi_controller(device):
+            # the SCSI controller sits on its own bus
+            unit_numbers = taken.setdefault(device.key, [])
+            unit_numbers.append(device.scsiCtlrUnitNumber)
+    return taken
+
+
+def allocate_controller_key_and_unit_number(client_factory, devices,
+                                            adapter_type):
+    """
+    This function inspects the current set of hardware devices and returns
+    controller_key and unit_number that can be used for attaching a new virtual
+    disk to adapter with the given adapter_type.
+    """
+    if devices.__class__.__name__ == "ArrayOfVirtualDevice":
+        devices = devices.VirtualDevice
+
+    taken = _find_allocated_slots(devices)
+
+    ret = None
+    if adapter_type == 'ide':
+        ide_keys = [dev.key for dev in devices if _is_ide_controller(dev)]
+        ret = _find_controller_slot(ide_keys, taken, 2)
+    elif adapter_type in ['lsiLogic', 'lsiLogicsas', 'busLogic']:
+        scsi_keys = [dev.key for dev in devices if _is_scsi_controller(dev)]
+        ret = _find_controller_slot(scsi_keys, taken, 16)
+    if ret:
+        return ret[0], ret[1], None
+
+    # create new controller with the specified type and return its spec
+    controller_key = -101
+    controller_spec = create_controller_spec(client_factory, controller_key,
+                                             adapter_type)
+    return controller_key, 0, controller_spec
 
 
 def get_rdm_disk(hardware_devices, uuid):
@@ -789,15 +834,18 @@ def get_stats_from_cluster(session, cluster):
             host_mors = host_ret.ManagedObjectReference
             result = session._call_method(vim_util,
                          "get_properties_for_a_collection_of_objects",
-                         "HostSystem", host_mors, ["summary.hardware"])
+                         "HostSystem", host_mors,
+                         ["summary.hardware", "summary.runtime"])
             for obj in result.objects:
                 hardware_summary = obj.propSet[0].val
-                # Total vcpus is the sum of all pCPUs of individual hosts
-                # The overcommitment ratio is factored in by the scheduler
-                cpu_info['vcpus'] += hardware_summary.numCpuThreads
-                cpu_info['cores'] += hardware_summary.numCpuCores
-                cpu_info['vendor'].append(hardware_summary.vendor)
-                cpu_info['model'].append(hardware_summary.cpuModel)
+                runtime_summary = obj.propSet[1].val
+                if runtime_summary.connectionState == "connected":
+                    # Total vcpus is the sum of all pCPUs of individual hosts
+                    # The overcommitment ratio is factored in by the scheduler
+                    cpu_info['vcpus'] += hardware_summary.numCpuThreads
+                    cpu_info['cores'] += hardware_summary.numCpuCores
+                    cpu_info['vendor'].append(hardware_summary.vendor)
+                    cpu_info['model'].append(hardware_summary.cpuModel)
 
         res_mor = prop_dict.get('resourcePool')
         if res_mor:
@@ -890,7 +938,7 @@ def _get_datastore_ref_and_name(data_stores, datastore_regex=None):
         ds_type = propdict['summary.type']
         ds_name = propdict['summary.name']
         if ((ds_type == 'VMFS' or ds_type == 'NFS') and
-                propdict['summary.accessible']):
+                propdict.get('summary.accessible')):
             if datastore_regex is None or datastore_regex.match(ds_name):
                 new_ds = DSRecord(
                     datastore=obj_content.obj,

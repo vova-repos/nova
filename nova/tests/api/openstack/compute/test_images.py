@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -21,9 +19,9 @@ and as a WSGI layer
 """
 
 import copy
-import urlparse
 
 from lxml import etree
+import six.moves.urllib.parse as urlparse
 import webob
 
 from nova.api.openstack.compute import images

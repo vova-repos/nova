@@ -36,9 +36,9 @@ A driver for XenServer or Xen Cloud Platform.
 """
 
 import math
-import urlparse
 
 from oslo.config import cfg
+import six.moves.urllib.parse as urlparse
 
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
@@ -88,7 +88,7 @@ xenapi_opts = [
                 help='Ensure compute service is running on host XenAPI '
                      'connects to.'),
     cfg.IntOpt('vhd_coalesce_max_attempts',
-               default=5,
+               default=20,
                deprecated_name='xenapi_vhd_coalesce_max_attempts',
                deprecated_group='DEFAULT',
                help='Max number of times to poll for VHD to coalesce. '
@@ -169,6 +169,12 @@ class XenAPIDriver(driver.ComputeDriver):
         return self._host_state
 
     def init_host(self, host):
+        LOG.warning(_('The xenapi driver does not meet the Nova project\'s '
+                      'requirements for quality verification and is planned '
+                      'for removal. This may change, but users should plan '
+                      'accordingly. Additional details here: '
+                      'https://wiki.openstack.org/wiki/HypervisorSupportMatrix'
+                      '/DeprecationPlan'))
         if CONF.xenserver.check_host:
             vm_utils.ensure_correct_host(self._session)
 
@@ -463,18 +469,22 @@ class XenAPIDriver(driver.ComputeDriver):
         total_disk_gb = host_stats['disk_total'] / units.Gi
         used_disk_gb = host_stats['disk_used'] / units.Gi
         hyper_ver = utils.convert_version_to_int(self._session.product_version)
-        dic = {'vcpus': 0,
+        dic = {'vcpus': host_stats['host_cpu_info']['cpu_count'],
                'memory_mb': total_ram_mb,
                'local_gb': total_disk_gb,
-               'vcpus_used': 0,
+               'vcpus_used': host_stats['vcpus_used'],
                'memory_mb_used': total_ram_mb - free_ram_mb,
                'local_gb_used': used_disk_gb,
                'hypervisor_type': 'xen',
                'hypervisor_version': hyper_ver,
                'hypervisor_hostname': host_stats['host_hostname'],
-               'cpu_info': host_stats['host_cpu_info']['cpu_count'],
+               # Todo(bobba) cpu_info may be in a format not supported by
+               # arch_filter.py - see libvirt/driver.py get_cpu_info
+               'cpu_info': jsonutils.dumps(host_stats['host_cpu_info']),
                'supported_instances': jsonutils.dumps(
-                   host_stats['supported_instances'])}
+                   host_stats['supported_instances']),
+               'pci_passthrough_devices': jsonutils.dumps(
+                   host_stats['pci_passthrough_devices'])}
 
         return dic
 

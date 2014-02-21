@@ -305,7 +305,7 @@ class HostTestCase(test.TestCase):
                'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 16, 'memory_mb_used': 32, 'local_gb_used': 10,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
-               'cpu_info': '', 'stats': {}}
+               'cpu_info': '', 'stats': ''}
         db.compute_node_create(ctxt, dic)
 
         return db.service_get(ctxt, s_ref['id'])
@@ -381,7 +381,7 @@ class HostSerializerTest(test.TestCase):
         for key, value in exemplar.items():
             self.assertEqual(value, tree.get(key))
 
-    def test_update_serializer_with_maintainance_mode(self):
+    def test_update_serializer_with_maintenance_mode(self):
         exemplar = dict(host='host_c1', maintenance_mode='enabled')
         serializer = os_hosts.HostUpdateTemplate()
         text = serializer.serialize(exemplar)
@@ -392,7 +392,7 @@ class HostSerializerTest(test.TestCase):
         for key, value in exemplar.items():
             self.assertEqual(value, tree.get(key))
 
-    def test_update_serializer_with_maintainance_mode_and_status(self):
+    def test_update_serializer_with_maintenance_mode_and_status(self):
         exemplar = dict(host='host_c1',
                         maintenance_mode='enabled',
                         status='enabled')

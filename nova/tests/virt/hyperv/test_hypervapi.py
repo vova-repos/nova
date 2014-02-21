@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #  Copyright 2012 Cloudbase Solutions Srl
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,6 +16,7 @@
 Test suite for the Hyper-V driver and related APIs.
 """
 
+import contextlib
 import io
 import os
 import platform
@@ -55,11 +54,13 @@ from nova.virt.hyperv import livemigrationutils
 from nova.virt.hyperv import networkutils
 from nova.virt.hyperv import networkutilsv2
 from nova.virt.hyperv import pathutils
+from nova.virt.hyperv import rdpconsoleutils
 from nova.virt.hyperv import utilsfactory
 from nova.virt.hyperv import vhdutils
 from nova.virt.hyperv import vhdutilsv2
 from nova.virt.hyperv import vmutils
 from nova.virt.hyperv import vmutilsv2
+from nova.virt.hyperv import volumeops
 from nova.virt.hyperv import volumeutils
 from nova.virt.hyperv import volumeutilsv2
 from nova.virt import images
@@ -173,6 +174,7 @@ class HyperVAPITestCase(test.NoDBTestCase):
                                   'get_controller_volume_paths')
         self._mox.StubOutWithMock(vmutils.VMUtils,
                                   'enable_vm_metrics_collection')
+        self._mox.StubOutWithMock(vmutils.VMUtils, 'get_vm_id')
 
         self._mox.StubOutWithMock(vhdutils.VHDUtils, 'create_differencing_vhd')
         self._mox.StubOutWithMock(vhdutils.VHDUtils, 'reconnect_parent_vhd')
@@ -230,6 +232,9 @@ class HyperVAPITestCase(test.NoDBTestCase):
                                   'logout_storage_target')
         self._mox.StubOutWithMock(volumeutilsv2.VolumeUtilsV2,
                                   'execute_log_out')
+
+        self._mox.StubOutWithMock(rdpconsoleutils.RDPConsoleUtils,
+                                  'get_rdp_console_port')
 
         self._mox.StubOutClassWithMocks(instance_metadata, 'InstanceMetadata')
         self._mox.StubOutWithMock(instance_metadata.InstanceMetadata,
@@ -1636,3 +1641,75 @@ class HyperVAPITestCase(test.NoDBTestCase):
                     self._test_spawn_instance, [], None)
             mock_destroy.assert_called_once_with(self._context,
                     self._test_spawn_instance, [], None)
+
+    def test_get_rdp_console(self):
+        self.flags(my_ip="192.168.1.1")
+
+        self._instance_data = self._get_instance_data()
+        instance = db.instance_create(self._context, self._instance_data)
+
+        fake_port = 9999
+        fake_vm_id = "fake_vm_id"
+
+        m = rdpconsoleutils.RDPConsoleUtils.get_rdp_console_port()
+        m.AndReturn(fake_port)
+
+        m = vmutils.VMUtils.get_vm_id(mox.IsA(str))
+        m.AndReturn(fake_vm_id)
+
+        self._mox.ReplayAll()
+        connect_info = self._conn.get_rdp_console(self._context, instance)
+        self._mox.VerifyAll()
+
+        self.assertEqual(CONF.my_ip, connect_info['host'])
+        self.assertEqual(fake_port, connect_info['port'])
+        self.assertEqual(fake_vm_id, connect_info['internal_access_path'])
+
+
+class VolumeOpsTestCase(HyperVAPITestCase):
+    """Unit tests for VolumeOps class."""
+
+    def setUp(self):
+        super(VolumeOpsTestCase, self).setUp()
+        self.volumeops = volumeops.VolumeOps()
+
+    def test_get_mounted_disk_from_lun(self):
+        with contextlib.nested(
+            mock.patch.object(self.volumeops._volutils,
+                              'get_device_number_for_target'),
+            mock.patch.object(self.volumeops._vmutils,
+                              'get_mounted_disk_by_drive_number')
+            ) as (mock_get_device_number_for_target,
+                  mock_get_mounted_disk_by_drive_number):
+
+            mock_get_device_number_for_target.return_value = 0
+            mock_get_mounted_disk_by_drive_number.return_value = 'disk_path'
+
+            block_device_info = db_fakes.get_fake_block_device_info(
+                self._volume_target_portal, self._volume_id)
+
+            mapping = driver.block_device_info_get_mapping(block_device_info)
+            data = mapping[0]['connection_info']['data']
+            target_lun = data['target_lun']
+            target_iqn = data['target_iqn']
+
+            disk = self.volumeops._get_mounted_disk_from_lun(target_iqn,
+                                                             target_lun)
+            self.assertEqual(disk, 'disk_path')
+
+    def test_get_mounted_disk_from_lun_failure(self):
+        with mock.patch.object(self.volumeops._volutils,
+                               'get_device_number_for_target') as m_device_num:
+            m_device_num.return_value = None
+
+            block_device_info = db_fakes.get_fake_block_device_info(
+                self._volume_target_portal, self._volume_id)
+
+            mapping = driver.block_device_info_get_mapping(block_device_info)
+            data = mapping[0]['connection_info']['data']
+            target_lun = data['target_lun']
+            target_iqn = data['target_iqn']
+
+            self.assertRaises(exception.NotFound,
+                              self.volumeops._get_mounted_disk_from_lun,
+                              target_iqn, target_lun)

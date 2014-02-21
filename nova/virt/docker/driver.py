@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 # Copyright (c) 2013 dotCloud, Inc.
 # All Rights Reserved.
 #
@@ -72,6 +70,12 @@ class DockerDriver(driver.ComputeDriver):
         return self._docker
 
     def init_host(self, host):
+        LOG.warning(_('The docker driver does not meet the Nova project\'s '
+                      'requirements for quality verification and is planned '
+                      'for removal. This may change, but users should plan '
+                      'accordingly. Additional details here: '
+                      'https://wiki.openstack.org/wiki/HypervisorSupportMatrix'
+                      '/DeprecationPlan'))
         if self.is_daemon_running() is False:
             raise exception.NovaException(_('Docker daemon is not running or '
                 'is not reachable (check the rights on /var/run/docker.sock)'))
@@ -190,12 +194,6 @@ class DockerDriver(driver.ComputeDriver):
             time.sleep(0.5)
             n += 1
 
-    def _find_fixed_ip(self, subnets):
-        for subnet in subnets:
-            for ip in subnet['ips']:
-                if ip['type'] == 'fixed' and ip['address']:
-                    return ip['address']
-
     def _setup_network(self, instance, network_info):
         if not network_info:
             return
@@ -220,9 +218,8 @@ class DockerDriver(driver.ComputeDriver):
         if_local_name = 'pvnetl{0}'.format(rand)
         if_remote_name = 'pvnetr{0}'.format(rand)
         bridge = network_info['bridge']
-        ip = self._find_fixed_ip(network_info['subnets'])
-        if not ip:
-            raise RuntimeError(_('Cannot set fixed ip'))
+        gateway = network.find_gateway(instance, network_info)
+        ip = network.find_fixed_ip(instance, network_info)
         undo_mgr = utils.UndoManager()
         try:
             utils.execute(
@@ -246,6 +243,10 @@ class DockerDriver(driver.ComputeDriver):
                 'ip', 'netns', 'exec', container_id, 'ifconfig',
                 if_remote_name, ip,
                 run_as_root=True)
+            utils.execute(
+                'ip', 'netns', 'exec', container_id,
+                'ip', 'route', 'replace', 'default', 'via', gateway, 'dev',
+                if_remote_name, run_as_root=True)
         except Exception:
             msg = _('Failed to setup the network, rolling back')
             undo_mgr.rollback_and_reraise(msg=msg, instance=instance)
@@ -285,7 +286,7 @@ class DockerDriver(driver.ComputeDriver):
         default_cmd = self._get_default_cmd(image_name)
         if default_cmd:
             args['Cmd'] = default_cmd
-        container_id = self.docker.create_container(args)
+        container_id = self._create_container(instance, args)
         if not container_id:
             msg = _('Image name "{0}" does not exist, fetching it...')
             LOG.info(msg.format(image_name))
@@ -294,7 +295,7 @@ class DockerDriver(driver.ComputeDriver):
                 raise exception.InstanceDeployFailure(
                     _('Cannot pull missing image'),
                     instance_id=instance['name'])
-            container_id = self.docker.create_container(args)
+            container_id = self._create_container(instance, args)
             if not container_id:
                 raise exception.InstanceDeployFailure(
                     _('Cannot create container'),
@@ -304,6 +305,8 @@ class DockerDriver(driver.ComputeDriver):
             self._setup_network(instance, network_info)
         except Exception as e:
             msg = _('Cannot setup network: {0}')
+            self.docker.kill_container(container_id)
+            self.docker.destroy_container(container_id)
             raise exception.InstanceDeployFailure(msg.format(e),
                                                   instance_id=instance['name'])
 
@@ -408,3 +411,7 @@ class DockerDriver(driver.ComputeDriver):
         """
         flavor = flavors.extract_flavor(instance)
         return int(flavor['vcpus']) * 1024
+
+    def _create_container(self, instance, args):
+        name = "nova-" + instance['uuid']
+        return self.docker.create_container(args, name)

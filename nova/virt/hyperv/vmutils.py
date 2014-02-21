@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2010 Cloud.com, Inc
 # Copyright 2012 Cloudbase Solutions Srl / Pedro Navarro Perez
 # All Rights Reserved.
@@ -153,6 +151,10 @@ class VMUtils(object):
 
     def vm_exists(self, vm_name):
         return self._lookup_vm(vm_name) is not None
+
+    def get_vm_id(self, vm_name):
+        vm = self._lookup_vm_check(vm_name)
+        return vm.Name
 
     def _get_vm_setting_data(self, vm):
         vmsettings = vm.associators(
@@ -397,8 +399,9 @@ class VMUtils(object):
         rasds = vmsettings[0].associators(
             wmi_result_class=self._STORAGE_ALLOC_SETTING_DATA_CLASS)
         disk_resources = [r for r in rasds
-                          if r.ResourceSubType ==
-                          self._IDE_DISK_RES_SUB_TYPE]
+                          if r.ResourceSubType in
+                          [self._IDE_DISK_RES_SUB_TYPE,
+                          self._IDE_DVD_RES_SUB_TYPE]]
         volume_resources = [r for r in rasds
                             if r.ResourceSubType ==
                             self._PHYS_DISK_RES_SUB_TYPE]

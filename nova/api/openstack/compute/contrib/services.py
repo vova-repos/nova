@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -174,8 +172,9 @@ class ServiceController(object):
             if id == "disable-log-reason":
                 reason = body['disabled_reason']
                 if not self._is_valid_as_reason(reason):
-                    msg = _('Disabled reason contains invalid characters '
-                            'or is too long')
+                    msg = _('The string containing the reason for disabling '
+                            'the service contains invalid characters or is '
+                            'too long.')
                     raise webob.exc.HTTPUnprocessableEntity(detail=msg)
 
                 status_detail['disabled_reason'] = reason

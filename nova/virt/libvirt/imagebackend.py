@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 Grid Dynamics
 # All Rights Reserved.
 #
@@ -64,6 +62,13 @@ __imagebackend_opts = [
                      ' if this flag is set to True.',
                 deprecated_group='DEFAULT',
                 deprecated_name='libvirt_sparse_logical_volumes'),
+    cfg.StrOpt('volume_clear',
+               default='zero',
+               help='Method used to wipe old volumes (valid options are: '
+                    'none, zero, shred)'),
+    cfg.IntOpt('volume_clear_size',
+               default=0,
+               help='Size in MiB to wipe at start of old volumes. 0 => all'),
     cfg.StrOpt('images_rbd_pool',
                default='rbd',
                help='The RADOS pool in which rbd volumes are stored',
@@ -572,7 +577,7 @@ class Rbd(Image):
         return False
 
     def _resize(self, volume_name, size):
-        size = int(size) * 1024
+        size = int(size) * units.Ki
 
         with RBDVolumeProxy(self, volume_name) as vol:
             vol.resize(size)

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -72,7 +70,7 @@ from nova.compute import vm_mode
 from nova import context as nova_context
 from nova import exception
 from nova.image import glance
-from nova import notifier
+from nova.objects import flavor as flavor_obj
 from nova.objects import instance as instance_obj
 from nova.objects import service as service_obj
 from nova.openstack.common import excutils
@@ -88,6 +86,7 @@ from nova.openstack.common import xmlutils
 from nova.pci import pci_manager
 from nova.pci import pci_utils
 from nova.pci import pci_whitelist
+from nova import rpc
 from nova import utils
 from nova import version
 from nova.virt import configdrive
@@ -142,12 +141,12 @@ libvirt_opts = [
                 deprecated_name='libvirt_inject_password',
                 deprecated_group='DEFAULT'),
     cfg.BoolOpt('inject_key',
-                default=True,
+                default=False,
                 help='Inject the ssh public key at boot time',
                 deprecated_name='libvirt_inject_key',
                 deprecated_group='DEFAULT'),
     cfg.IntOpt('inject_partition',
-                default=1,
+                default=-2,
                 help='The partition to inject to : '
                      '-2 => disable, -1 => inspect (libguestfs only), '
                      '0 => not partitioned, >0 => partition number',
@@ -603,7 +602,27 @@ class LibvirtDriver(driver.ComputeDriver):
         LOG.debug(_("Starting green dispatch thread"))
         eventlet.spawn(self._dispatch_thread)
 
+    def _do_quality_warnings(self):
+        """Warn about untested driver configurations.
+
+        This will log a warning message about untested driver or host arch
+        configurations to indicate to administrators that the quality is
+        unknown. Currently, only qemu or kvm on intel 32- or 64-bit systems
+        is tested upstream.
+        """
+        caps = self.get_host_capabilities()
+        arch = caps.host.cpu.arch
+        if (CONF.libvirt.virt_type not in ('qemu', 'kvm') or
+                arch not in ('i686', 'x86_64')):
+            LOG.warning(_('The libvirt driver is not tested on '
+                          '%(type)s/%(arch)s by the OpenStack project and '
+                          'thus its quality can not be ensured. For more '
+                          'information, see: https://wiki.openstack.org/wiki/'
+                          'HypervisorSupportMatrix'),
+                        {'type': CONF.libvirt.virt_type, 'arch': arch})
+
     def init_host(self, host):
+        self._do_quality_warnings()
         libvirt.registerErrorHandler(libvirt_error_handler, None)
         libvirt.virEventRegisterDefaultImpl()
 
@@ -627,8 +646,10 @@ class LibvirtDriver(driver.ComputeDriver):
         finally:
             # Enabling the compute service, in case it was disabled
             # since the connection was successful.
-            is_connected = bool(wrapped_conn)
-            self.set_host_enabled(CONF.host, is_connected)
+            disable_reason = DISABLE_REASON_UNDEFINED
+            if not wrapped_conn:
+                disable_reason = 'Failed to connect to libvirt'
+            self._set_host_enabled(bool(wrapped_conn), disable_reason)
 
         self._wrapped_conn = wrapped_conn
 
@@ -682,7 +703,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 self._wrapped_conn = None
                 # Disable compute service to avoid
                 # new instances of being scheduled on this host.
-                self.set_host_enabled(CONF.host, _error)
+                self._set_host_enabled(False, disable_reason=_error)
 
     @staticmethod
     def _test_connection(conn):
@@ -746,9 +767,9 @@ class LibvirtDriver(driver.ComputeDriver):
             payload = dict(ip=LibvirtDriver.get_host_ip_addr(),
                            method='_connect',
                            reason=ex)
-            notifier.get_notifier('compute').error(
-                nova_context.get_admin_context(),
-                'compute.libvirt.error', payload)
+            rpc.get_notifier('compute').error(nova_context.get_admin_context(),
+                                              'compute.libvirt.error',
+                                              payload)
             raise exception.HypervisorUnavailable(host=CONF.host)
 
     def get_num_instances(self):
@@ -965,7 +986,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 else:
                     retry = False
                     errcode = e.get_error_code()
-                    LOG.error(_('Error from libvirt during unfilter. '
+                    LOG.exception(_('Error from libvirt during unfilter. '
                                 'Code=%(errcode)s Error=%(e)s') %
                               {'errcode': errcode, 'e': e},
                               instance=instance)
@@ -1332,13 +1353,13 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def attach_interface(self, instance, image_meta, vif):
         virt_dom = self._lookup_by_name(instance['name'])
-        inst_type = self.virtapi.flavor_get(
+        flavor = flavor_obj.Flavor.get_by_id(
             nova_context.get_admin_context(read_deleted='yes'),
             instance['instance_type_id'])
         self.vif_driver.plug(instance, vif)
         self.firewall_driver.setup_basic_filtering(instance, [vif])
         cfg = self.vif_driver.get_config(instance, vif, image_meta,
-                                         inst_type)
+                                         flavor)
         try:
             flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
             state = LIBVIRT_POWER_STATE[virt_dom.info()[0]]
@@ -1353,10 +1374,10 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def detach_interface(self, instance, vif):
         virt_dom = self._lookup_by_name(instance['name'])
-        inst_type = self.virtapi.flavor_get(
+        flavor = flavor_obj.Flavor.get_by_id(
             nova_context.get_admin_context(read_deleted='yes'),
             instance['instance_type_id'])
-        cfg = self.vif_driver.get_config(instance, vif, None, inst_type)
+        cfg = self.vif_driver.get_config(instance, vif, None, flavor)
         try:
             self.vif_driver.unplug(instance, vif)
             flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
@@ -1728,7 +1749,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                create_info):
         """Create snapshots of a Cinder volume via libvirt.
 
-        :param instance: VM instance reference
+        :param instance: VM instance object reference
         :param volume_id: id of volume being snapshotted
         :param create_info: dict of information used to create snapshots
                      - snapshot_id : ID of snapshot
@@ -1742,9 +1763,9 @@ class LibvirtDriver(driver.ComputeDriver):
                   {'c_info': create_info}, instance=instance)
 
         try:
-            virt_dom = self._lookup_by_name(instance['name'])
+            virt_dom = self._lookup_by_name(instance.name)
         except exception.InstanceNotFound:
-            raise exception.InstanceNotRunning(instance_id=instance['uuid'])
+            raise exception.InstanceNotRunning(instance_id=instance.uuid)
 
         if create_info['type'] != 'qcow2':
             raise exception.NovaException(_('Unknown type: %s') %
@@ -1780,7 +1801,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 do a blockCommit operation
             Files must be adjacent in snap chain.
 
-        :param instance: instance reference
+        :param instance: instance object reference
         :param volume_id: volume UUID
         :param snapshot_id: snapshot UUID (unused currently)
         :param delete_info: {
@@ -1811,9 +1832,9 @@ class LibvirtDriver(driver.ComputeDriver):
             raise exception.NovaException(msg)
 
         try:
-            virt_dom = self._lookup_by_name(instance['name'])
+            virt_dom = self._lookup_by_name(instance.name)
         except exception.InstanceNotFound:
-            raise exception.InstanceNotRunning(instance_id=instance['uuid'])
+            raise exception.InstanceNotRunning(instance_id=instance.uuid)
 
         ##### Find dev name
         my_dev = None
@@ -2703,8 +2724,9 @@ class LibvirtDriver(driver.ComputeDriver):
                       % {'dev': pci_devs, 'dom': dom.ID()})
             raise
 
-    def set_host_enabled(self, host, enabled):
-        """Sets the specified host's ability to accept new instances.
+    def _set_host_enabled(self, enabled,
+                          disable_reason=DISABLE_REASON_UNDEFINED):
+        """Enables / Disables the compute service on this host.
 
            This doesn't override non-automatic disablement with an automatic
            setting; thereby permitting operators to keep otherwise
@@ -2714,12 +2736,7 @@ class LibvirtDriver(driver.ComputeDriver):
         status_name = {True: 'disabled',
                        False: 'enabled'}
 
-        if isinstance(enabled, bool):
-            disable_service = not enabled
-            disable_reason = DISABLE_REASON_UNDEFINED
-        else:
-            disable_service = bool(enabled)
-            disable_reason = enabled
+        disable_service = not enabled
 
         ctx = nova_context.get_admin_context()
         try:
@@ -2746,7 +2763,6 @@ class LibvirtDriver(driver.ComputeDriver):
                     LOG.debug(_('Not overriding manual compute service '
                                 'status with: %s'),
                                  status_name[disable_service])
-            return status_name[disable_service]
         except exception.ComputeHostNotFound:
             LOG.warn(_('Cannot update service status on host: %s,'
                         'since it is not registered.') % CONF.host)
@@ -2961,6 +2977,14 @@ class LibvirtDriver(driver.ComputeDriver):
         for d in devices:
             self.set_cache_mode(d)
 
+        if (image_meta and
+                image_meta.get('properties', {}).get('hw_scsi_model')):
+            hw_scsi_model = image_meta['properties']['hw_scsi_model']
+            scsi_controller = vconfig.LibvirtConfigGuestController()
+            scsi_controller.type = 'scsi'
+            scsi_controller.model = hw_scsi_model
+            devices.append(scsi_controller)
+
         return devices
 
     def get_guest_config_sysinfo(self, instance):
@@ -2998,7 +3022,7 @@ class LibvirtDriver(driver.ComputeDriver):
             'kernel_id' if a kernel is needed for the rescue image.
         """
 
-        inst_type = self.virtapi.flavor_get(
+        flavor = flavor_obj.Flavor.get_by_id(
             nova_context.get_admin_context(read_deleted='yes'),
             instance['instance_type_id'])
         inst_path = libvirt_utils.get_instance_path(instance)
@@ -3010,12 +3034,13 @@ class LibvirtDriver(driver.ComputeDriver):
         guest.virt_type = CONF.libvirt.virt_type
         guest.name = instance['name']
         guest.uuid = instance['uuid']
-        guest.memory = inst_type['memory_mb'] * 1024
-        guest.vcpus = inst_type['vcpus']
+        # We are using default unit for memory: KiB
+        guest.memory = flavor.memory_mb * units.Ki
+        guest.vcpus = flavor.vcpus
         guest.cpuset = CONF.vcpu_pin_set
 
         quota_items = ['cpu_shares', 'cpu_period', 'cpu_quota']
-        for key, value in inst_type['extra_specs'].iteritems():
+        for key, value in flavor.extra_specs.iteritems():
             scope = key.split(':')
             if len(scope) > 1 and scope[0] == 'quota':
                 if scope[1] in quota_items:
@@ -3057,6 +3082,22 @@ class LibvirtDriver(driver.ComputeDriver):
                 guest.sysinfo = self.get_guest_config_sysinfo(instance)
                 guest.os_smbios = vconfig.LibvirtConfigGuestSMBIOS()
 
+            # The underlying machine type can be set as an image attribute,
+            # or otherwise based on some architecture specific defaults
+            if (image_meta is not None and image_meta.get('properties') and
+                   image_meta['properties'].get('hw_machine_type')
+                   is not None):
+                guest.os_mach_type = \
+                    image_meta['properties']['hw_machine_type']
+            else:
+                # For ARM systems we will default to vexpress-a15 for armv7
+                # and virt for aarch64
+                if caps.host.cpu.arch == "armv7l":
+                    guest.os_mach_type = "vexpress-a15"
+
+                if caps.host.cpu.arch == "aarch64":
+                    guest.os_mach_type = "virt"
+
         if CONF.libvirt.virt_type == "lxc":
             guest.os_init_path = "/sbin/init"
             guest.os_cmdline = CONSOLE
@@ -3064,15 +3105,11 @@ class LibvirtDriver(driver.ComputeDriver):
             guest.os_kernel = "/usr/bin/linux"
             guest.os_root = root_device_name
         else:
-            if ((CONF.libvirt.virt_type == "xen" and
-                 guest.os_type == vm_mode.XEN)):
-                guest.os_root = root_device_name
-
             if rescue:
                 if rescue.get('kernel_id'):
                     guest.os_kernel = os.path.join(inst_path, "kernel.rescue")
                     if CONF.libvirt.virt_type == "xen":
-                        guest.os_cmdline = "ro"
+                        guest.os_cmdline = "ro root=%s" % root_device_name
                     else:
                         guest.os_cmdline = ("root=%s %s" % (root_device_name,
                                                             CONSOLE))
@@ -3082,7 +3119,7 @@ class LibvirtDriver(driver.ComputeDriver):
             elif instance['kernel_id']:
                 guest.os_kernel = os.path.join(inst_path, "kernel")
                 if CONF.libvirt.virt_type == "xen":
-                    guest.os_cmdline = "ro"
+                    guest.os_cmdline = "ro root=%s" % root_device_name
                 else:
                     guest.os_cmdline = ("root=%s %s" % (root_device_name,
                                                         CONSOLE))
@@ -3125,22 +3162,27 @@ class LibvirtDriver(driver.ComputeDriver):
             tmrtc.name = "rtc"
             tmrtc.tickpolicy = "catchup"
 
+            tmhpet = vconfig.LibvirtConfigGuestTimer()
+            tmhpet.name = "hpet"
+            tmhpet.present = False
+
             clk.add_timer(tmpit)
             clk.add_timer(tmrtc)
+            clk.add_timer(tmhpet)
 
         for cfg in self.get_guest_storage_config(instance,
                                                  image_meta,
                                                  disk_info,
                                                  rescue,
                                                  block_device_info,
-                                                 inst_type):
+                                                 flavor):
             guest.add_device(cfg)
 
         for vif in network_info:
             cfg = self.vif_driver.get_config(instance,
                                              vif,
                                              image_meta,
-                                             inst_type)
+                                             flavor)
             guest.add_device(cfg)
 
         if ((CONF.libvirt.virt_type == "qemu" or
@@ -3211,17 +3253,27 @@ class LibvirtDriver(driver.ComputeDriver):
         if add_video_driver:
             VALID_VIDEO_DEVICES = ("vga", "cirrus", "vmvga", "xen", "qxl")
             video = vconfig.LibvirtConfigGuestVideo()
-            meta_prop = image_meta.get('properties', {}) if image_meta else {}
+            # NOTE(ldbragst): The following logic sets the video.type
+            # depending on supported defaults given the architecture,
+            # virtualization type, and features. The video.type attribute can
+            # be overridden by the user with image_meta['properties'], which
+            # is carried out in the next if statement below this one.
+            arch = libvirt_utils.get_arch(image_meta)
+            if guest.os_type == vm_mode.XEN:
+                video.type = 'xen'
+            elif arch in ('ppc', 'ppc64'):
+                # NOTE(ldbragst): PowerKVM doesn't support 'cirrus' be default
+                # so use 'vga' instead when running on Power hardware.
+                video.type = 'vga'
+            elif CONF.spice.enabled:
+                video.type = 'qxl'
 
+            meta_prop = image_meta.get('properties', {}) if image_meta else {}
             if meta_prop.get('hw_video_model'):
                 video.type = meta_prop.get('hw_video_model')
                 if (video.type not in VALID_VIDEO_DEVICES):
                     raise exception.InvalidVideoMode(model=video.type)
 
-            elif CONF.spice.enabled:
-                video.type = 'qxl'
-            if guest.os_type == vm_mode.XEN:
-                video.type = 'xen'
             guest.add_device(video)
 
         # Qemu guest agent only support 'qemu' and 'kvm' hypervisor
@@ -3264,12 +3316,16 @@ class LibvirtDriver(driver.ComputeDriver):
                                             context, instance['image_ref'])
             image_meta = compute_utils.get_image_metadata(
                                 context, image_service, image_id, instance)
+        # NOTE(danms): Stringifying a NetworkInfo will take a lock. Do
+        # this ahead of time so that we don't acquire it while also
+        # holding the logging lock.
+        network_info_str = str(network_info)
         LOG.debug(_('Start to_xml '
                     'network_info=%(network_info)s '
                     'disk_info=%(disk_info)s '
                     'image_meta=%(image_meta)s rescue=%(rescue)s'
                     'block_device_info=%(block_device_info)s'),
-                  {'network_info': network_info, 'disk_info': disk_info,
+                  {'network_info': network_info_str, 'disk_info': disk_info,
                    'image_meta': image_meta, 'rescue': rescue,
                    'block_device_info': block_device_info},
                   instance=instance)
@@ -3432,8 +3488,8 @@ class LibvirtDriver(driver.ComputeDriver):
             if (not reboot and 'data' in connection_info and
                     'volume_id' in connection_info['data']):
                 connection_info['data']['device_path'] = conf.source_path
-                self.virtapi.block_device_mapping_update(context, vol.id,
-                        {'connection_info': jsonutils.dumps(connection_info)})
+                vol['connection_info'] = connection_info
+                vol.save(context)
 
                 volume_id = connection_info['data']['volume_id']
                 encryption = encryptors.get_encryption_metadata(
@@ -3645,11 +3701,11 @@ class LibvirtDriver(driver.ComputeDriver):
                               int(m[idx2 + 1]) +
                               int(m[idx3 + 1])))
             # Convert it to MB
-            return used / 1024
+            return used / units.Ki
         else:
             avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))
             # Convert it to MB
-            return self.get_memory_mb_total() - avail / 1024
+            return self.get_memory_mb_total() - avail / units.Ki
 
     def get_hypervisor_type(self):
         """Get hypervisor type.
@@ -3769,8 +3825,13 @@ class LibvirtDriver(driver.ComputeDriver):
                     if fun_cap.type == 'virt_functions':
                         return {'dev_type': 'type-PF'}
                     if fun_cap.type == 'phys_function':
+                        phys_address = "%s:%s:%s.%s" % (
+                            fun_cap.device_addrs[0][0].replace("0x", ''),
+                            fun_cap.device_addrs[0][1].replace("0x", ''),
+                            fun_cap.device_addrs[0][2].replace("0x", ''),
+                            fun_cap.device_addrs[0][3].replace("0x", ''))
                         return {'dev_type': 'type-VF',
-                                'phys_function': fun_cap.device_addrs}
+                                'phys_function': phys_address}
             return {'dev_type': 'type-PCI'}
 
         virtdev = self._conn.nodeDeviceLookupByName(devname)
@@ -3920,7 +3981,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
         # Temporary: convert supported_instances into a string, while keeping
         # the RPC version as JSON. Can be changed when RPC broadcast is removed
-        stats = self.host_state.get_host_stats(refresh=True)
+        stats = self.get_host_stats(refresh=True)
         stats['supported_instances'] = jsonutils.dumps(
                 stats['supported_instances'])
         return stats
@@ -3968,7 +4029,7 @@ class LibvirtDriver(driver.ComputeDriver):
         if block_migration:
             disk_available_gb = dst_compute_info['disk_available_least']
             disk_available_mb = \
-                    (disk_available_gb * 1024) - CONF.reserved_host_disk_mb
+                    (disk_available_gb * units.Ki) - CONF.reserved_host_disk_mb
 
         # Compare CPU
         source_cpu_info = src_compute_info['cpu_info']
@@ -4453,14 +4514,11 @@ class LibvirtDriver(driver.ComputeDriver):
             # In case of block migration, destination does not have
             # libvirt.xml
             disk_info = blockinfo.get_disk_info(
-                CONF.libvirt.virt_type, instance)
-            self.to_xml(context, instance, network_info, disk_info,
-                        block_device_info, write_to_disk=True)
-            # libvirt.xml should be made by to_xml(), but libvirt
-            # does not accept to_xml() result, since uuid is not
-            # included in to_xml() result.
-            dom = self._lookup_by_name(instance["name"])
-            self._conn.defineXML(dom.XMLDesc(0))
+                CONF.libvirt.virt_type, instance, block_device_info)
+            xml = self.to_xml(context, instance, network_info, disk_info,
+                              block_device_info=block_device_info,
+                              write_to_disk=True)
+            self._conn.defineXML(xml)
 
     def get_instance_disk_info(self, instance_name, xml=None,
                                block_device_info=None):
@@ -4965,15 +5023,9 @@ class LibvirtDriver(driver.ComputeDriver):
                                           *block_device_lists):
         ephemerals, swap, block_device_mapping = block_device_lists[:3]
 
-        def _update_func(bdm):
-            bdm_id = bdm.get('id')
-            self.virtapi.block_device_mapping_update(
-                nova_context.get_admin_context(),
-                bdm_id, bdm)
-
         blockinfo.default_device_names(CONF.libvirt.virt_type,
+                                       nova_context.get_admin_context(),
                                        instance, root_device_name,
-                                       _update_func,
                                        ephemerals, swap,
                                        block_device_mapping)
 

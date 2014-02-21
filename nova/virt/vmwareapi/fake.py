@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
@@ -270,15 +268,56 @@ class HostInternetScsiHba(DataObject):
         self.key = 'key-vmhba33'
 
 
+class FileAlreadyExists(DataObject):
+    """File already exists class."""
+
+    def __init__(self):
+        super(FileAlreadyExists, self).__init__()
+        self.__name__ = error_util.FILE_ALREADY_EXISTS
+
+
+class FileNotFound(DataObject):
+    """File not found class."""
+
+    def __init__(self):
+        super(FileNotFound, self).__init__()
+        self.__name__ = error_util.FILE_NOT_FOUND
+
+
+class FileFault(DataObject):
+    """File fault."""
+
+    def __init__(self):
+        super(FileFault, self).__init__()
+        self.__name__ = error_util.FILE_FAULT
+
+
+class CannotDeleteFile(DataObject):
+    """Cannot delete file."""
+
+    def __init__(self):
+        super(CannotDeleteFile, self).__init__()
+        self.__name__ = error_util.CANNOT_DELETE_FILE
+
+
+class FileLocked(DataObject):
+    """File locked."""
+
+    def __init__(self):
+        super(FileLocked, self).__init__()
+        self.__name__ = error_util.FILE_LOCKED
+
+
 class VirtualDisk(DataObject):
     """
     Virtual Disk class.
     """
 
-    def __init__(self):
+    def __init__(self, controllerKey=0, unitNumber=0):
         super(VirtualDisk, self).__init__()
         self.key = 0
-        self.unitNumber = 0
+        self.controllerKey = controllerKey
+        self.unitNumber = unitNumber
 
 
 class VirtualDiskFlatVer2BackingInfo(DataObject):
@@ -298,9 +337,17 @@ class VirtualDiskRawDiskMappingVer1BackingInfo(DataObject):
         self.lunUuid = ""
 
 
+class VirtualIDEController(DataObject):
+
+    def __init__(self, key=0):
+        self.key = key
+
+
 class VirtualLsiLogicController(DataObject):
     """VirtualLsiLogicController class."""
-    pass
+    def __init__(self, key=0, scsiCtlrUnitNumber=0):
+        self.key = key
+        self.scsiCtlrUnitNumber = scsiCtlrUnitNumber
 
 
 class VirtualLsiLogicSASController(DataObject):
@@ -385,8 +432,8 @@ class VirtualMachine(ManagedObject):
                 return
 
             # Case of Reconfig of VM to attach disk
-            controller_key = val.deviceChange[1].device.controllerKey
-            filename = val.deviceChange[1].device.backing.fileName
+            controller_key = val.deviceChange[0].device.controllerKey
+            filename = val.deviceChange[0].device.backing.fileName
 
             disk = VirtualDisk()
             disk.controllerKey = controller_key
@@ -597,6 +644,13 @@ class HostSystem(ManagedObject):
         hardware.memorySize = units.Gi
         summary.hardware = hardware
 
+        runtime = DataObject()
+        if connected:
+            runtime.connectionState = "connected"
+        else:
+            runtime.connectionState = "disconnected"
+        summary.runtime = runtime
+
         quickstats = DataObject()
         quickstats.overallMemoryUsage = 500
         summary.quickStats = quickstats
@@ -616,8 +670,8 @@ class HostSystem(ManagedObject):
         self.set("summary", summary)
         self.set("capability.maxHostSupportedVcpus", 600)
         self.set("summary.runtime.inMaintenanceMode", False)
-        self.set("runtime.connectionState", "connected")
         self.set("summary.hardware", hardware)
+        self.set("summary.runtime", runtime)
         self.set("config.network.pnic", net_info_pnic)
         self.set("connected", connected)
 
@@ -738,11 +792,20 @@ class Datacenter(ManagedObject):
 class Task(ManagedObject):
     """Task class."""
 
-    def __init__(self, task_name, state="running", result=None):
+    def __init__(self, task_name, state="running", result=None,
+                 error_fault=None):
         super(Task, self).__init__("Task")
         info = DataObject()
         info.name = task_name
         info.state = state
+        if state == 'error':
+            error = DataObject()
+            error.localizedMessage = "Error message"
+            if not error_fault:
+                error.fault = DataObject()
+            else:
+                error.fault = error_fault
+            info.error = error
         info.result = result
         self.set("info", info)
 
@@ -792,8 +855,8 @@ def create_cluster(name, ds_ref):
     _create_object('ClusterComputeResource', cluster)
 
 
-def create_task(task_name, state="running", result=None):
-    task = Task(task_name, state, result)
+def create_task(task_name, state="running", result=None, error_fault=None):
+    task = Task(task_name, state, result, error_fault)
     _create_object("Task", task)
     return task
 
@@ -950,7 +1013,7 @@ class FakeVim(object):
                  _db_content['session']):
             LOG.debug(_("Session is faulty"))
             raise error_util.VimFaultException(
-                               [error_util.FAULT_NOT_AUTHENTICATED],
+                               [error_util.NOT_AUTHENTICATED],
                                _("Session Invalid"))
 
     def _session_is_active(self, *args, **kwargs):

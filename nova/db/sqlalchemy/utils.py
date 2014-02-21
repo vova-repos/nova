@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Boris Pavlovic (boris@pavlovic.me).
 # All Rights Reserved.
 #
@@ -514,8 +512,17 @@ def _change_deleted_column_type_to_id_type_sqlite(migrate_engine, table_name,
         if not isinstance(constraint, CheckConstraint):
             return False
         sqltext = str(constraint.sqltext)
-        return (sqltext.endswith("deleted in (0, 1)") or
-                sqltext.endswith("deleted IN (:deleted_1, :deleted_2)"))
+        # NOTE(I159): when the type of column `deleted` is changed from boolean
+        # to int, the corresponding CHECK constraint is dropped too. But
+        # starting from SQLAlchemy version 0.8.3, those CHECK constraints
+        # aren't dropped anymore. So despite the fact that column deleted is
+        # of type int now, we still restrict its values to be either 0 or 1.
+        constraint_markers = (
+            "deleted in (0, 1)",
+            "deleted IN (:deleted_1, :deleted_2)",
+            "deleted IN (:param_1, :param_2)"
+        )
+        return any(sqltext.endswith(marker) for marker in constraint_markers)
 
     constraints = []
     for constraint in table.constraints:
@@ -576,16 +583,8 @@ def _drop_index(migrate_engine, table, index_name, idx_columns):
 
 def _change_index_columns(migrate_engine, table, index_name,
                           new_columns, old_columns):
-    if _index_exists(migrate_engine, table.name, index_name):
-        Index(
-            index_name,
-            *[getattr(table.c, col) for col in old_columns]
-        ).drop(migrate_engine)
-
-    Index(
-        index_name,
-        *[getattr(table.c, col) for col in new_columns]
-    ).create()
+    _drop_index(migrate_engine, table, index_name, old_columns)
+    _add_index(migrate_engine, table, index_name, new_columns)
 
 
 def modify_indexes(migrate_engine, data, upgrade=True):

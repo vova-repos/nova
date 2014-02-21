@@ -339,7 +339,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.mox.ReplayAll()
 
         self.compute._init_instance(self.context, instance)
-        self.assertEqual(None, instance.task_state)
+        self.assertIsNone(instance.task_state)
 
     def test_init_instance_reverts_crashed_migration_from_active(self):
         self._test_init_instance_reverts_crashed_migrations(
@@ -429,6 +429,16 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         instance.vm_state = vm_states.ACTIVE
         instance.task_state = task_states.IMAGE_SNAPSHOT
         self._test_init_instance_cleans_image_states(instance)
+
+    def test_init_instance_errors_when_not_migrating(self):
+        instance = instance_obj.Instance(self.context)
+        instance.uuid = 'foo'
+        instance.vm_state = vm_states.ERROR
+        instance.task_state = task_states.IMAGE_UPLOADING
+        self.mox.StubOutWithMock(compute_utils, 'get_nw_info_for_instance')
+        self.mox.ReplayAll()
+        self.compute._init_instance(self.context, instance)
+        self.mox.VerifyAll()
 
     def test_get_instances_on_driver(self):
         fake_context = context.get_admin_context()
@@ -641,7 +651,16 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         new_volume_id = uuidutils.generate_uuid()
         volumes[new_volume_id] = {'id': new_volume_id,
                                   'display_name': 'new_volume',
-                                  'status': 'attaching'}
+                                  'status': 'available'}
+
+        def fake_vol_api_begin_detaching(context, volume_id):
+            self.assertTrue(uuidutils.is_uuid_like(volume_id))
+            volumes[volume_id]['status'] = 'detaching'
+
+        def fake_vol_api_roll_detaching(context, volume_id):
+            self.assertTrue(uuidutils.is_uuid_like(volume_id))
+            if volumes[volume_id]['status'] == 'detaching':
+                volumes[volume_id]['status'] = 'in-use'
 
         def fake_vol_api_func(context, volume, *args):
             self.assertTrue(uuidutils.is_uuid_like(volume))
@@ -656,6 +675,11 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             self.assertIn(volumes[volume_id]['status'],
                           ['available', 'attaching'])
             volumes[volume_id]['status'] = 'in-use'
+
+        def fake_vol_api_reserve(context, volume_id):
+            self.assertTrue(uuidutils.is_uuid_like(volume_id))
+            self.assertEqual(volumes[volume_id]['status'], 'available')
+            volumes[volume_id]['status'] = 'attaching'
 
         def fake_vol_unreserve(context, volume_id):
             self.assertTrue(uuidutils.is_uuid_like(volume_id))
@@ -675,10 +699,16 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         def fake_func_exc(*args, **kwargs):
             raise AttributeError  # Random exception
 
+        self.stubs.Set(self.compute.volume_api, 'begin_detaching',
+                       fake_vol_api_begin_detaching)
+        self.stubs.Set(self.compute.volume_api, 'roll_detaching',
+                       fake_vol_api_roll_detaching)
         self.stubs.Set(self.compute.volume_api, 'get', fake_vol_get)
         self.stubs.Set(self.compute.volume_api, 'initialize_connection',
                        fake_vol_api_func)
         self.stubs.Set(self.compute.volume_api, 'attach', fake_vol_attach)
+        self.stubs.Set(self.compute.volume_api, 'reserve_volume',
+                       fake_vol_api_reserve)
         self.stubs.Set(self.compute.volume_api, 'unreserve_volume',
                        fake_vol_unreserve)
         self.stubs.Set(self.compute.volume_api, 'terminate_connection',
@@ -713,8 +743,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertRaises(AttributeError, self.compute.swap_volume,
                           self.context, old_volume_id, new_volume_id,
                           {'uuid': 'fake'})
-        self.assertEqual(volumes[old_volume_id]['status'], 'detaching')
-        self.assertEqual(volumes[new_volume_id]['status'], 'attaching')
+        self.assertEqual(volumes[old_volume_id]['status'], 'in-use')
+        self.assertEqual(volumes[new_volume_id]['status'], 'available')
 
         volumes[old_volume_id]['status'] = 'detaching'
         volumes[new_volume_id]['status'] = 'attaching'
@@ -723,7 +753,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertRaises(AttributeError, self.compute.swap_volume,
                           self.context, old_volume_id, new_volume_id,
                           {'uuid': 'fake'})
-        self.assertEqual(volumes[old_volume_id]['status'], 'detaching')
+        self.assertEqual(volumes[old_volume_id]['status'], 'in-use')
         self.assertEqual(volumes[new_volume_id]['status'], 'available')
 
     def test_check_can_live_migrate_source(self):
@@ -736,18 +766,14 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         expected_dest_check_data = dict(dest_check_data,
                                         is_volume_backed=is_volume_backed)
 
-        self.mox.StubOutWithMock(self.compute.conductor_api,
-                                 'block_device_mapping_get_all_by_instance')
         self.mox.StubOutWithMock(self.compute.compute_api,
                                  'is_volume_backed_instance')
         self.mox.StubOutWithMock(self.compute.driver,
                                  'check_can_live_migrate_source')
 
         instance_p = obj_base.obj_to_primitive(instance)
-        self.compute.conductor_api.block_device_mapping_get_all_by_instance(
-                self.context, instance_p, legacy=False).AndReturn(bdms)
         self.compute.compute_api.is_volume_backed_instance(
-                self.context, instance, bdms).AndReturn(is_volume_backed)
+                self.context, instance).AndReturn(is_volume_backed)
         self.compute.driver.check_can_live_migrate_source(
                 self.context, instance, expected_dest_check_data)
 
@@ -1276,7 +1302,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     self.image, self.block_device_mapping):
                 pass
         except Exception as e:
-            self.assertTrue(isinstance(e, exception.BuildAbortException))
+            self.assertIsInstance(e, exception.BuildAbortException)
 
     def test_failed_bdm_prep_from_delete_raises_unexpected(self):
         with contextlib.nested(
@@ -1294,9 +1320,8 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                         self.image, self.block_device_mapping):
                     pass
             except Exception as e:
-                self.assertTrue(
-                        isinstance(e,
-                            exception.UnexpectedDeletingTaskStateError))
+                self.assertIsInstance(e,
+                    exception.UnexpectedDeletingTaskStateError)
 
             _build_networks_for_instance.assert_has_calls(
                     mock.call(self.context, self.instance,
@@ -1317,7 +1342,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     self.block_device_mapping):
                 pass
         except Exception as e:
-            self.assertTrue(isinstance(e, exception.BuildAbortException))
+            self.assertIsInstance(e, exception.BuildAbortException)
 
     def test_failed_network_alloc_from_delete_raises_unexpected(self):
         with mock.patch.object(self.compute,
@@ -1333,7 +1358,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                         self.image, self.block_device_mapping):
                     pass
             except Exception as e:
-                self.assertTrue(isinstance(e, exc))
+                self.assertIsInstance(e, exc)
 
             _build_networks.assert_has_calls(
                     mock.call(self.context, self.instance,
@@ -1383,7 +1408,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     self.image, self.block_device_mapping):
                 fake_spawn()
         except Exception as e:
-            self.assertTrue(isinstance(e, exception.BuildAbortException))
+            self.assertIsInstance(e, exception.BuildAbortException)
 
     def test_cleanup_cleans_volumes(self):
         self.mox.StubOutWithMock(self.compute, '_cleanup_volumes')

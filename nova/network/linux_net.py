@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -829,8 +827,12 @@ def initialize_gateway_device(dev, network_ref):
 
     # NOTE(vish): The ip for dnsmasq has to be the first address on the
     #             bridge for it to respond to reqests properly
-    full_ip = '%s/%s' % (network_ref['dhcp_server'],
-                         network_ref['cidr'].rpartition('/')[2])
+    try:
+        prefix = network_ref.cidr.prefixlen
+    except AttributeError:
+        prefix = network_ref['cidr'].rpartition('/')[2]
+
+    full_ip = '%s/%s' % (network_ref['dhcp_server'], prefix)
     new_ip_params = [[full_ip, 'brd', network_ref['broadcast']]]
     old_ip_params = []
     out, err = _execute('ip', 'addr', 'show', 'dev', dev,
@@ -1551,7 +1553,7 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
             for line in out.split('\n'):
                 fields = line.split()
                 if fields and fields[0] == 'inet':
-                    if fields[-2] == 'secondary':
+                    if fields[-2] in ('secondary', 'dynamic', ):
                         params = fields[1:-2]
                     else:
                         params = fields[1:-1]

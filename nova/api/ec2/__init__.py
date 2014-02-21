@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -20,11 +18,10 @@ Starting point for routing EC2 requests.
 
 """
 
-import urlparse
-
 from eventlet.green import httplib
 from oslo.config import cfg
 import six
+import six.moves.urllib.parse as urlparse
 import webob
 import webob.dec
 import webob.exc
@@ -482,7 +479,7 @@ def ec2_error_ex(ex, req, code=None, message=None, unexpected=False):
     status codes are always returned for them.
 
     Unexpected 5xx errors may contain sensitive information,
-    supress their messages for security.
+    suppress their messages for security.
     """
     if not code:
         code = exception_to_ec2code(ex)

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 Rackspace
 # All Rights Reserved.
 #
@@ -32,6 +30,7 @@ from nova.objects import instance_info_cache
 from nova.objects import pci_device
 from nova.objects import virtual_interface as vif_obj
 from nova.openstack.common import jsonutils
+from nova.tests.objects import test_fixed_ip
 from nova.tests.objects import test_instance_info_cache
 from nova.tests.objects import test_pci_device
 from nova.virt.libvirt import config as libvirt_config
@@ -127,13 +126,16 @@ class FakeNetworkManager(network_manager.NetworkManager):
                         dict(address='173.16.1.2',
                              fixed_ip_id=210)]
 
-        fixed_ips = [dict(id=100,
+        fixed_ips = [dict(test_fixed_ip.fake_fixed_ip,
+                          id=100,
                           address='172.16.0.1',
                           virtual_interface_id=0),
-                     dict(id=200,
+                     dict(test_fixed_ip.fake_fixed_ip,
+                          id=200,
                           address='172.16.0.2',
                           virtual_interface_id=1),
-                     dict(id=210,
+                     dict(test_fixed_ip.fake_fixed_ip,
+                          id=210,
                           address='173.16.0.2',
                           virtual_interface_id=2)]
 
@@ -220,7 +222,15 @@ def fake_network(network_id, ipv6=None):
              'host': None,
              'project_id': 'fake_project',
              'vpn_public_address': '192.168.%d.2' % network_id,
-             'rxtx_base': network_id * 10}
+             'vpn_public_port': None,
+             'vpn_private_address': None,
+             'dhcp_start': None,
+             'rxtx_base': network_id * 10,
+             'priority': None,
+             'deleted': False,
+             'created_at': None,
+             'updated_at': None,
+             'deleted_at': None}
     if ipv6:
         fake_network['cidr_v6'] = '2001:db8:0:%x::/64' % network_id
         fake_network['gateway_v6'] = '2001:db8:0:%x::1' % network_id

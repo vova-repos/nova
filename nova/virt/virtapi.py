@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -55,12 +53,5 @@ class VirtAPI(object):
         :param context: security context
         :param instance: the instance we're getting bdms for
         :param legacy: get bdm info in legacy format (or not)
-        """
-        raise NotImplementedError()
-
-    def block_device_mapping_update(self, context, bdm_id, bdm_values):
-        """Update the database for the passed block device mapping
-        :param context: security context
-        :param bdm: the block device mapping dict
         """
         raise NotImplementedError()

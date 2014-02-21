@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -20,7 +18,6 @@ from webob import exc
 from nova.api.openstack import extensions
 from nova import exception
 from nova.openstack.common.gettextutils import _
-from nova.openstack.common import strutils
 from nova import utils
 
 ALIAS = "os-multiple-create"
@@ -34,8 +31,6 @@ class MultipleCreate(extensions.V3APIExtensionBase):
 
     name = "MultipleCreate"
     alias = ALIAS
-    namespace = ("http://docs.openstack.org/compute/ext/"
-                 "multiplecreate/api/v3")
     version = 1
 
     def get_resources(self):
@@ -70,15 +65,3 @@ class MultipleCreate(extensions.V3APIExtensionBase):
         create_kwargs['max_count'] = max_count
         create_kwargs['return_reservation_id'] = server_dict.get(
             RRID_ATTRIBUTE_NAME, False)
-
-    def server_xml_extract_server_deserialize(self, server_node, server_dict):
-        res_id = server_node.getAttribute(RRID_ATTRIBUTE_NAME)
-        if res_id:
-            server_dict[RRID_ATTRIBUTE_NAME] = strutils.bool_from_string(
-                res_id)
-        min_count = server_node.getAttribute(MIN_ATTRIBUTE_NAME)
-        if min_count:
-            server_dict[MIN_ATTRIBUTE_NAME] = min_count
-        max_count = server_node.getAttribute(MAX_ATTRIBUTE_NAME)
-        if max_count:
-            server_dict[MAX_ATTRIBUTE_NAME] = max_count

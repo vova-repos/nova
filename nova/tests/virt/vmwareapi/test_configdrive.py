@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 IBM Corp.
 # Copyright 2011 OpenStack Foundation
 #
@@ -120,7 +118,6 @@ class ConfigDriveTestCase(test.NoDBTestCase):
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg())
         self.conn._vmops._attach_cdrom_to_vm(mox.IgnoreArg(),
-                                               mox.IgnoreArg(),
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg())
