@@ -73,3 +73,4 @@ def set_stubs(stubs):
               fake.fake_download_flat_image)
     stubs.Set(image_transfer, 'download_stream_optimized_image',
               fake.fake_download_stream_optimized_image)
+    stubs.Set(image_transfer, 'upload_image', fake.fake_upload_image)

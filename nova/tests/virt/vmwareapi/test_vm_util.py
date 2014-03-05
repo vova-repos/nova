@@ -392,6 +392,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         if parent:
             disk_backing.parent = parent
         disk.backing = disk_backing
+        disk.capacityInBytes = 1024
         controller = fake.VirtualLsiLogicSASController()
         controller.key = controller_key
         devices = [disk, controller]
@@ -400,24 +401,26 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
     def test_get_vmdk_path_and_adapter_type(self):
         filename = '[test_datastore] test_file.vmdk'
         devices = self._vmdk_path_and_adapter_type_devices(filename)
-        vmdk_info = vm_util.get_vmdk_path_and_adapter_type(devices)
+        vmdk_info = vm_util.get_vmdk_device_info(devices)
         adapter_type = vmdk_info[1]
         self.assertEqual('lsiLogicsas', adapter_type)
-        self.assertEqual(vmdk_info[0], filename)
+        self.assertEqual(filename, vmdk_info[0])
+        self.assertEqual(1024, vmdk_info[3])
 
     def test_get_vmdk_path_and_adapter_type_with_match(self):
         n_filename = '[test_datastore] uuid/uuid.vmdk'
         devices = self._vmdk_path_and_adapter_type_devices(n_filename)
-        vmdk_info = vm_util.get_vmdk_path_and_adapter_type(
+        vmdk_info = vm_util.get_vmdk_device_info(
                 devices, uuid='uuid')
         adapter_type = vmdk_info[1]
         self.assertEqual('lsiLogicsas', adapter_type)
         self.assertEqual(n_filename, vmdk_info[0])
+        self.assertEqual(1024, vmdk_info[3])
 
     def test_get_vmdk_path_and_adapter_type_with_nomatch(self):
         n_filename = '[test_datastore] diuu/diuu.vmdk'
         devices = self._vmdk_path_and_adapter_type_devices(n_filename)
-        vmdk_info = vm_util.get_vmdk_path_and_adapter_type(
+        vmdk_info = vm_util.get_vmdk_device_info(
                 devices, uuid='uuid')
         adapter_type = vmdk_info[1]
         self.assertEqual('lsiLogicsas', adapter_type)

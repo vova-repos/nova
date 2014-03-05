@@ -261,7 +261,7 @@ class VMwareVolumeOps(object):
                                                 vm_ref, 'VirtualMachine',
                                                 'config.hardware.device')
         (vmdk_file_path, adapter_type,
-         disk_type) = vm_util.get_vmdk_path_and_adapter_type(hw_devices)
+         disk_type, capacity) = vm_util.get_vmdk_device_info(hw_devices)
 
         # Attach the disk to virtual machine instance
         self.attach_disk_to_vm(vm_ref, instance, adapter_type,
@@ -299,7 +299,7 @@ class VMwareVolumeOps(object):
                         "get_dynamic_property", vm_ref,
                         "VirtualMachine", "config.hardware.device")
         (vmdk_file_path, adapter_type,
-         disk_type) = vm_util.get_vmdk_path_and_adapter_type(hardware_devices)
+         disk_type, capacity) = vm_util.get_vmdk_device_info(hardware_devices)
 
         self.attach_disk_to_vm(vm_ref, instance,
                                adapter_type, 'rdmp',
@@ -410,7 +410,7 @@ class VMwareVolumeOps(object):
                                                 volume_ref, 'VirtualMachine',
                                                 'config.hardware.device')
         (vmdk_file_path, adapter_type,
-         disk_type) = vm_util.get_vmdk_path_and_adapter_type(hw_devices)
+         disk_type, capacity) = vm_util.get_vmdk_device_info(hw_devices)
         # Attach the current volume to the volume_ref
         self.attach_disk_to_vm(volume_ref, instance,
                                adapter_type, disk_type,

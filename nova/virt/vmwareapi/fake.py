@@ -463,6 +463,8 @@ class VirtualMachine(ManagedObject):
             disk_backing.fileName = filename
             disk_backing.key = -101
             disk.backing = disk_backing
+            disk.capacityInBytes = 1024
+            disk.capacityInKB = 1
 
             controller = VirtualLsiLogicController()
             controller.key = controller_key
@@ -954,7 +956,8 @@ def fake_download_stream_optimized_image(context, timeout_secs, image_service,
     return vm_ref
 
 
-def fake_upload_image(context, image, instance, **kwargs):
+def fake_upload_image(context, timeout_secs, image_service, image_id, owner_id,
+                      **kwargs):
     """Fakes the upload of an image."""
     pass
 
@@ -983,6 +986,17 @@ def _get_vm_mdo(vm_ref):
         raise exception.NotFound(_("Virtual Machine with ref %s is not "
                         "there") % vm_ref)
     return _db_content.get("VirtualMachine")[vm_ref]
+
+
+class FakeObject(object):
+    def __init__(self):
+        self._fields = {}
+
+    def __setitem__(self, key, value):
+        self._fields[key] = value
+
+    def __getitem__(self, item):
+        return self._fields[item]
 
 
 class FakeFactory(object):

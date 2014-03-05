@@ -57,7 +57,6 @@ from nova.virt import driver as v_driver
 from nova.virt import fake
 from nova.virt import imagehandler
 from nova.virt.vmwareapi import driver
-from nova.virt.vmwareapi import ds_util
 from nova.virt.vmwareapi import fake as vmwareapi_fake
 from nova.virt.vmwareapi import imagecache
 from nova.virt.vmwareapi import vim_util
@@ -952,7 +951,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                                      self.instance["uuid"])
         self.assertIsNotNone(vm_ref, 'VM Reference cannot be none')
 
-    def _test_snapshot(self):
+    def _test_snapshot(self, vm_ref):
         expected_calls = [
             {'args': (),
              'kwargs':
@@ -965,10 +964,42 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         info = self.conn.get_info({'uuid': self.uuid,
                                    'node': self.instance_node})
         self._check_vm_info(info, power_state.RUNNING)
-        with mock.patch.object(imagehandler, 'handle_image',
-                               self.mock_handle_image):
-            self.conn.snapshot(self.context, self.instance, "Test-Snapshot",
-                               func_call_matcher.call)
+
+        snapshot_ref = vmwareapi_fake.ManagedObjectReference(
+                               value="Snapshot-123",
+                               name="VirtualMachineSnapshot")
+        self.mox.StubOutWithMock(vmops.VMwareVMOps, '_create_vm_snapshot')
+        self.conn._vmops._create_vm_snapshot(
+                self.instance, vm_ref).AndReturn(snapshot_ref)
+
+        snapshot_vm_ref = vmwareapi_fake.ManagedObjectReference(
+                               value="VM-From-Snapshot-123",
+                               name="VirtualMachine")
+        self.mox.StubOutWithMock(vmops.VMwareVMOps,
+                                 '_create_linked_clone_from_snapshot')
+        self.conn._vmops._create_linked_clone_from_snapshot(
+                self.instance, vm_ref,
+                snapshot_ref).AndReturn(snapshot_vm_ref)
+
+        self.mox.StubOutWithMock(vmops.VMwareVMOps, '_destroy_vm')
+        self.conn._vmops._destroy_vm(mox.IgnoreArg(), snapshot_vm_ref)
+
+        self.mox.StubOutWithMock(vmops.VMwareVMOps,
+                                 '_delete_vm_snapshot')
+        self.conn._vmops._delete_vm_snapshot(
+                self.instance, vm_ref, snapshot_ref).AndReturn(None)
+
+        self.mox.ReplayAll()
+
+        image_meta = vmwareapi_fake.FakeObject()
+        image_meta['name'] = "fake-snapshot-name"
+        image_meta['is_public'] = False
+        with mock.patch.object(nova.tests.image.fake._FakeImageService,
+                               'show', return_value=image_meta):
+            with mock.patch.object(imagehandler, 'handle_image',
+                                   self.mock_handle_image):
+                self.conn.snapshot(self.context, self.instance,
+                                   "Test-Snapshot", func_call_matcher.call)
         info = self.conn.get_info({'uuid': self.uuid,
                                    'node': self.instance_node})
         self._check_vm_info(info, power_state.RUNNING)
@@ -976,7 +1007,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
     def test_snapshot(self):
         self._create_vm()
-        self._test_snapshot()
+        fake_vm = vmwareapi_fake._get_objects("VirtualMachine").objects[0].obj
+        self._test_snapshot(fake_vm)
 
     def test_snapshot_non_existent(self):
         self._create_instance()
@@ -987,22 +1019,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
     def test_snapshot_delete_vm_snapshot(self):
         self._create_vm()
         fake_vm = vmwareapi_fake._get_objects("VirtualMachine").objects[0].obj
-        snapshot_ref = vmwareapi_fake.ManagedObjectReference(
-                               value="Snapshot-123",
-                               name="VirtualMachineSnapshot")
-
-        self.mox.StubOutWithMock(vmops.VMwareVMOps,
-                                 '_create_vm_snapshot')
-        self.conn._vmops._create_vm_snapshot(
-                self.instance, fake_vm).AndReturn(snapshot_ref)
-
-        self.mox.StubOutWithMock(vmops.VMwareVMOps,
-                                 '_delete_vm_snapshot')
-        self.conn._vmops._delete_vm_snapshot(
-                self.instance, fake_vm, snapshot_ref).AndReturn(None)
-        self.mox.ReplayAll()
-
-        self._test_snapshot()
+        self._test_snapshot(fake_vm)
 
     def test_reboot(self):
         self._create_vm()
@@ -1913,42 +1930,6 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase):
     def test_finish_revert_migration_power_off(self):
         self._test_finish_revert_migration(power_on=False)
         self.assertEqual(False, self.power_on_called)
-
-    def test_snapshot(self):
-        # Ensure VMwareVCVMOps's get_copy_virtual_disk_spec is getting called
-        # two times
-        self.mox.StubOutWithMock(vmops.VMwareVCVMOps,
-                                 'get_copy_virtual_disk_spec')
-        self.conn._vmops.get_copy_virtual_disk_spec(
-                mox.IgnoreArg(), mox.IgnoreArg(),
-                mox.IgnoreArg()).AndReturn(None)
-        self.conn._vmops.get_copy_virtual_disk_spec(
-                mox.IgnoreArg(), mox.IgnoreArg(),
-                mox.IgnoreArg()).AndReturn(None)
-
-        self.mox.ReplayAll()
-
-        self._create_vm()
-        self._test_snapshot()
-
-    def test_snapshot_using_file_manager(self):
-        self._create_vm()
-        uuid_str = uuidutils.generate_uuid()
-        self.mox.StubOutWithMock(uuidutils,
-                                 'generate_uuid')
-        uuidutils.generate_uuid().AndReturn(uuid_str)
-
-        self.mox.StubOutWithMock(ds_util, 'file_delete')
-        # Check calls for delete vmdk and -flat.vmdk pair
-        ds_util.file_delete(mox.IgnoreArg(),
-                "[%s] vmware_temp/%s-flat.vmdk" % (self.ds, uuid_str),
-                mox.IgnoreArg()).AndReturn(None)
-        ds_util.file_delete(mox.IgnoreArg(),
-                "[%s] vmware_temp/%s.vmdk" % (self.ds, uuid_str),
-                mox.IgnoreArg()).AndReturn(None)
-
-        self.mox.ReplayAll()
-        self._test_snapshot()
 
     def test_spawn_invalid_node(self):
         self._create_instance(node='InvalidNodeName')

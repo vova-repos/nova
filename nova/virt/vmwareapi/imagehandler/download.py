@@ -22,8 +22,6 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt.imagehandler import base
 from nova.virt import vmwareapi
-from nova.virt.vmwareapi import read_write_util
-from nova.virt.vmwareapi import vmware_images
 
 LOG = logging.getLogger(__name__)
 
@@ -185,24 +183,28 @@ class DownloadImageHandler(base.ImageHandler):
             LOG.error(_("Cannot push image %s with null datastore name"),
                       image_id)
             return False, None, None
-        cookies = kwargs.get('cookies')
-        if cookies is None:
-            LOG.error(_("Cannot push image %s with null cookies"), image_id)
-            return False, None, None
-        read_file_handle = read_write_util.VMwareHTTPReadFile(
-            host, dc_path, ds_name, cookies, path)
-        file_size = read_file_handle.get_size()
+        #cookies = kwargs.get('cookies')
+        #if cookies is None:
+        #    LOG.error(_("Cannot push image %s with null cookies"), image_id)
+        #    return False, None, None
+
+        #read_file_handle = read_write_util.VMwareHTTPReadFile(
+        #    host, dc_path, ds_name, cookies, path)
+        #file_size = read_file_handle.get_size()
+        LOG.debug(_("Uploading image %s") % image_id)
         (image_service, image_id) = glance.get_remote_image_service(
             context, image_id)
         metadata = image_service.show(context, image_id)
 
         # The properties and other fields that we need to set for the image.
+        # Note(vui): update oslo.vmware to return image_metadata instead
+        # of constructing one here.
         image_metadata = {"disk_format": "vmdk",
                           "is_public": "false",
                           "name": metadata['name'],
                           "status": "active",
                           "container_format": "bare",
-                          "size": file_size,
+                          "size": kwargs.get("vmdk_size"),
                           "properties": {"vmware_adaptertype":
                                          kwargs.get("adapter_type"),
                                          "vmware_disktype":
@@ -212,9 +214,25 @@ class DownloadImageHandler(base.ImageHandler):
                                          "vmware_image_version":
                                          kwargs.get("image_version"),
                                          "owner_id": project_id}}
-        vmware_images.start_transfer(context, read_file_handle, file_size,
-                                     image_service=image_service,
-                                     image_id=image_id,
-                                     image_meta=image_metadata)
+
+        session = kwargs.get("session")
+        image_transfer.upload_image(
+            context,
+            kwargs.get("transfer_timeout_secs"),
+            image_service,
+            image_id,
+            kwargs.get("project_id"),
+            vm=kwargs.get("vm"),
+            os_type=kwargs.get("os_type"),
+            adapter_type=kwargs.get("adapter_type"),
+            image_version=kwargs.get("image_version"),
+            is_public=metadata['is_public'],
+            vmdk_size=kwargs.get("vmdk_size"),
+            image_name=metadata['name'],
+            host=session._host,
+            data_center_name=kwargs.get("datacenter_path"),
+            datastore_name=kwargs.get("datastore_name"),
+            session=kwargs.get("session"))
+
         LOG.debug(_("Uploaded image %s to the Glance image server") % image_id)
         return True, None, image_metadata

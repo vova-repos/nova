@@ -19,73 +19,12 @@ Utility functions for Image transfer.
 
 import os
 
-from nova import exception
 from nova.image import glance
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova.virt.vmwareapi import io_util
 from nova.virt.vmwareapi import read_write_util
 
 LOG = logging.getLogger(__name__)
-
-QUEUE_BUFFER_SIZE = 10
-
-
-def start_transfer(context, read_file_handle, data_size,
-        write_file_handle=None, image_service=None, image_id=None,
-        image_meta=None):
-    """Start the data transfer from the reader to the writer.
-    Reader writes to the pipe and the writer reads from the pipe. This means
-    that the total transfer time boils down to the slower of the read/write
-    and not the addition of the two times.
-    """
-
-    if not image_meta:
-        image_meta = {}
-
-    # The pipe that acts as an intermediate store of data for reader to write
-    # to and writer to grab from.
-    thread_safe_pipe = io_util.ThreadSafePipe(QUEUE_BUFFER_SIZE, data_size)
-    # The read thread. In case of glance it is the instance of the
-    # GlanceFileRead class. The glance client read returns an iterator
-    # and this class wraps that iterator to provide datachunks in calls
-    # to read.
-    read_thread = io_util.IOThread(read_file_handle, thread_safe_pipe)
-
-    # In case of Glance - VMware transfer, we just need a handle to the
-    # HTTP Connection that is to send transfer data to the VMware datastore.
-    if write_file_handle:
-        write_thread = io_util.IOThread(thread_safe_pipe, write_file_handle)
-    # In case of VMware - Glance transfer, we relinquish VMware HTTP file read
-    # handle to Glance Client instance, but to be sure of the transfer we need
-    # to be sure of the status of the image on glance changing to active.
-    # The GlanceWriteThread handles the same for us.
-    elif image_service and image_id:
-        write_thread = io_util.GlanceWriteThread(context, thread_safe_pipe,
-                image_service, image_id, image_meta)
-    # Start the read and write threads.
-    read_event = read_thread.start()
-    write_event = write_thread.start()
-    try:
-        # Wait on the read and write events to signal their end
-        read_event.wait()
-        write_event.wait()
-    except Exception as exc:
-        # In case of any of the reads or writes raising an exception,
-        # stop the threads so that we un-necessarily don't keep the other one
-        # waiting.
-        read_thread.stop()
-        write_thread.stop()
-
-        # Log and raise the exception.
-        LOG.exception(exc)
-        raise exception.NovaException(exc)
-    finally:
-        # No matter what, try closing the read and write handles, if it so
-        # applies.
-        read_file_handle.close()
-        if write_file_handle:
-            write_file_handle.close()
 
 
 def upload_iso_to_datastore(iso_path, instance, **kwargs):

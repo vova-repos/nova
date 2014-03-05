@@ -319,13 +319,14 @@ def get_vm_extra_config_spec(client_factory, extra_opts):
     return config_spec
 
 
-def get_vmdk_path_and_adapter_type(hardware_devices, uuid=None):
+def get_vmdk_device_info(hardware_devices, uuid=None):
     """Gets the vmdk file path and the storage adapter type."""
     if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
         hardware_devices = hardware_devices.VirtualDevice
     vmdk_file_path = None
     vmdk_controller_key = None
     disk_type = None
+    capacity = None
 
     adapter_type_dict = {}
     for device in hardware_devices:
@@ -338,6 +339,7 @@ def get_vmdk_path_and_adapter_type(hardware_devices, uuid=None):
                 else:
                     vmdk_file_path = device.backing.fileName
                 vmdk_controller_key = device.controllerKey
+                capacity = device.capacityInBytes
                 if getattr(device.backing, 'thinProvisioned', False):
                     disk_type = "thin"
                 else:
@@ -356,7 +358,7 @@ def get_vmdk_path_and_adapter_type(hardware_devices, uuid=None):
 
     adapter_type = adapter_type_dict.get(vmdk_controller_key, "")
 
-    return (vmdk_file_path, adapter_type, disk_type)
+    return (vmdk_file_path, adapter_type, disk_type, capacity)
 
 
 def _find_controller_slot(controller_keys, taken, max_unit_number):
