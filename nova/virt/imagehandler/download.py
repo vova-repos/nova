@@ -64,3 +64,18 @@ class DownloadImageHandler(base.ImageHandler):
             return os.path.exists(dst_path) and not os.path.exists(src_path)
         else:
             return False
+
+    def _push_image(self, context, image_id, image_meta,
+                    path, purge_props=False,
+                    user_id=None, project_id=None,
+                    **kwargs):
+        (image_service, _image_id) = glance.get_remote_image_service(context,
+                                                                     image_id)
+        with fileutils.file_open(path) as image_file:
+            image_service.update(context, image_id, image_meta,
+                                 image_file, purge_props)
+        locations = image_service.get_locations(context, image_id)
+        meta_data = image_service.show(context, image_id)
+        return (True,   # update() call will raise exception if we get failed
+                locations[0] if locations else None,
+                meta_data)

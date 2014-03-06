@@ -23,6 +23,7 @@ import six
 
 from nova.compute import manager
 from nova import exception
+from nova.openstack.common import fileutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -246,7 +247,10 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
                           lambda *args, **kwargs: None)
 
     @catch_notimplementederror
-    def test_snapshot_running(self):
+    @mock.patch.object(fileutils, 'file_open')
+    def test_snapshot_running(self, mock_file_open):
+        mock_file_open.side_effect = lambda path: fake_libvirt_utils.File(path)
+
         img_ref = self.image_service.create(self.ctxt, {'name': 'snap-1'})
         instance_ref, network_info = self._get_running_instance()
         self.connection.snapshot(self.ctxt, instance_ref, img_ref['id'],

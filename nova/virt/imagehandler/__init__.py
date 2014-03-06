@@ -115,7 +115,7 @@ def load_image_handlers(driver):
 
 def handle_image(context=None, image_id=None,
                  user_id=None, project_id=None,
-                 target_path=None):
+                 target_path=None, any_handler=False):
     """Handle image using available handles.
 
     This generator will return each available handler on each time.
@@ -124,6 +124,9 @@ def handle_image(context=None, image_id=None,
     :param user_id: Request user id
     :param project_id: Request project id
     :param target_path: Where the image data to write
+    :param any_handler: Allow use any enabled handler to handle image
+        when there's not available location for the image, otherwise it
+        will try location-independent handler only.
     :raises NoImageHandlerAvailable: if no any image handler specified in
         the configuration is available for this request.
     """
@@ -164,7 +167,7 @@ def handle_image(context=None, image_id=None,
         if not handled:
             # Note(zhiyan): using location-independent handler do it.
             for image_handler in _IMAGE_HANDLERS:
-                if len(image_handler.get_schemes()) == 0:
+                if any_handler or len(image_handler.get_schemes()) == 0:
                     yield image_handler, None, image_meta
                     handled = image_handler.last_ops_handled()
                     if handled:

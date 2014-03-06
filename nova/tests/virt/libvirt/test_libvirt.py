@@ -2571,6 +2571,8 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
         libvirt_driver.libvirt_utils.disk_type = "qcow2"
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         self.mox.ReplayAll()
 
@@ -2623,6 +2625,8 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
         libvirt_driver.libvirt_utils.disk_type = "qcow2"
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         self.mox.ReplayAll()
 
@@ -2669,6 +2673,8 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
         self.stubs.Set(libvirt_driver.libvirt_utils, 'disk_type', 'raw')
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         def convert_image(source, dest, out_format):
             libvirt_driver.libvirt_utils.files[dest] = ''
@@ -2722,6 +2728,8 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
         self.stubs.Set(libvirt_driver.libvirt_utils, 'disk_type', 'raw')
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         def convert_image(source, dest, out_format):
             libvirt_driver.libvirt_utils.files[dest] = ''
@@ -2775,6 +2783,8 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
         libvirt_driver.libvirt_utils.disk_type = "qcow2"
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         self.mox.ReplayAll()
 
@@ -2824,6 +2834,8 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
         libvirt_driver.libvirt_utils.disk_type = "qcow2"
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         self.mox.ReplayAll()
 
@@ -2875,6 +2887,8 @@ class LibvirtConnTestCase(test.TestCase):
         libvirt_driver.LibvirtDriver._conn.lookupByName = self.fake_lookup
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         self.mox.ReplayAll()
 
@@ -2926,6 +2940,8 @@ class LibvirtConnTestCase(test.TestCase):
         libvirt_driver.LibvirtDriver._conn.lookupByName = self.fake_lookup
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         self.mox.ReplayAll()
 
@@ -2972,6 +2988,8 @@ class LibvirtConnTestCase(test.TestCase):
         libvirt_driver.LibvirtDriver._conn.lookupByName = self.fake_lookup
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         self.mox.ReplayAll()
 
@@ -3019,6 +3037,8 @@ class LibvirtConnTestCase(test.TestCase):
         libvirt_driver.LibvirtDriver._conn.lookupByName = self.fake_lookup
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         self.mox.ReplayAll()
 
@@ -3067,6 +3087,8 @@ class LibvirtConnTestCase(test.TestCase):
         libvirt_driver.LibvirtDriver._conn.lookupByName = self.fake_lookup
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         self.mox.ReplayAll()
 
@@ -3117,6 +3139,8 @@ class LibvirtConnTestCase(test.TestCase):
         libvirt_driver.LibvirtDriver._conn.lookupByName = self.fake_lookup
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
+        self.stubs.Set(fileutils, 'file_open',
+                       lambda path: fake_libvirt_utils.File(path))
 
         self.mox.ReplayAll()
 

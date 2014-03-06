@@ -288,3 +288,31 @@ class ImageHandlerTestCase(test.TestCase):
                           expected_locations,
                           expected_handled_location,
                           expected_handled_path)
+
+    @mock.patch.object(download_imagehandler.DownloadImageHandler,
+                       'get_schemes')
+    def test_handle_image_for_location_independent_handling(self,
+                                                         mock_get_schemes):
+        mock_get_schemes.return_value = ('http',)
+        self.image_service.get_locations = mock.MagicMock(
+                                      return_value=['fake_location'])
+
+        self.flags(image_handlers=['download'])
+        imagehandler.load_image_handlers(self.fake_driver)
+        self.assertEqual(1, len(imagehandler._IMAGE_HANDLERS))
+        self.assertEqual(0, len(imagehandler._IMAGE_HANDLERS_ASSO))
+
+        self.assertRaises(exception.NoImageHandlerAvailable,
+                          list,  # handle_image() returns generator
+                          imagehandler.handle_image())
+
+        loop_times = 0
+        for handler_context in imagehandler.handle_image(
+                                             any_handler=True):
+            (handler, loc, _image_meta) = handler_context
+            self.assertEqual(handler, imagehandler._IMAGE_HANDLERS[0])
+            self.assertIsNone(loc)
+            loop_times += 1
+            handler.last_ops_handled = mock.MagicMock(return_value=True)
+
+        self.assertEqual(1, loop_times)

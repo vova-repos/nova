@@ -137,6 +137,35 @@ class ImageHandler(object):
             self._set_handled(ret)
             return ret
 
+    def push_image(self, context, image_id, image_meta,
+                   path, purge_props=False,
+                   user_id=None, project_id=None,
+                   **kwargs):
+        """Push an image on image service.
+
+        :param context: Request context
+        :param image_id: The opaque image identifier
+        :param image_meta: The opaque image metadata
+        :param path: The image object local storage path
+        :param purge_props: The flag for purging of properties
+        :param user_id: Request user id
+        :param project_id: Request project id
+        :param kwargs: Other handler-specified arguments
+
+        :retval a boolean value to inform handling success or not
+        """
+        with lockutils.lock("nova-imagehandler-%s" % image_id,
+                            lock_file_prefix='nova-', external=True):
+            ret = self._push_image(context, image_id, image_meta,
+                                   path, purge_props,
+                                   user_id, project_id,
+                                   **kwargs)
+            ret, location, image_meta = ret
+            if ret:
+                self._associate(path, location, image_meta)
+            self._set_handled(ret)
+            return ret
+
     def last_ops_handled(self, flush=True):
         ret = self._last_ops_handled
         if flush:
@@ -244,5 +273,29 @@ class ImageHandler(object):
         :param kwargs: Other handler-specified arguments
 
         :retval a boolean value to inform handling success or not
+        """
+        pass
+
+    @abc.abstractmethod
+    def _push_image(self, context, image_id, image_meta,
+                    path, purge_props=False,
+                    user_id=None, project_id=None,
+                    **kwargs):
+        """Push an image on image service.
+        Specific handler can using full-copy or zero-copy approach to
+        implement this method.
+
+        :param context: Request context
+        :param image_id: The opaque image identifier
+        :param image_meta: The opaque image metadata
+        :param path: The image object local storage path
+        :param purge_props: The flag for purging of properties
+        :param user_id: Request user id
+        :param project_id: Request project id
+        :param kwargs: Other handler-specified arguments
+
+        :retval 1. A boolean value to inform handling success or not
+                2. The location of the image we just pushed
+                3. The latest metadata of the image we just pushed
         """
         pass

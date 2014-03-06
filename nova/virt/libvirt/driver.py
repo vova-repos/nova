@@ -95,6 +95,7 @@ from nova.virt.disk import api as disk
 from nova.virt import driver
 from nova.virt import event as virtevent
 from nova.virt import firewall
+from nova.virt import imagehandler
 from nova.virt.libvirt import blockinfo
 from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import firewall as libvirt_firewall
@@ -1564,13 +1565,16 @@ class LibvirtDriver(driver.ComputeDriver):
 
             update_task_state(task_state=task_states.IMAGE_UPLOADING,
                      expected_state=task_states.IMAGE_PENDING_UPLOAD)
-            with libvirt_utils.file_open(out_path) as image_file:
-                image_service.update(context,
-                                     image_href,
-                                     metadata,
-                                     image_file)
-                LOG.info(_("Snapshot image upload complete"),
-                         instance=instance)
+
+            for handler_context in imagehandler.handle_image(context,
+                    image_href, target_path=out_path, any_handler=True):
+                (handler, _loc, _image_meta) = handler_context
+                # The loop will stop when the handle function
+                # returns success.
+                handler.push_image(context, image_href, metadata, out_path)
+
+            LOG.info(_("Snapshot image upload complete"),
+                     instance=instance)
 
     @staticmethod
     def _wait_for_block_job(domain, disk_path, abort_on_error=False):
