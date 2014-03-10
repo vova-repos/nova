@@ -51,6 +51,7 @@ from nova.tests.virt.vmwareapi import stubs
 from nova import utils as nova_utils
 from nova.virt import driver as v_driver
 from nova.virt import fake
+from nova.virt import imagehandler
 from nova.virt.vmwareapi import driver
 from nova.virt.vmwareapi import ds_util
 from nova.virt.vmwareapi import error_util
@@ -925,10 +926,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                         network_info=self.network_info,
                         block_device_info=block_device_info)
 
-    def mock_upload_image(self, context, image, instance, **kwargs):
-        self.assertEqual(image, 'Test-Snapshot')
-        self.assertEqual(instance, self.instance)
-        self.assertEqual(kwargs['disk_type'], 'preallocated')
+    def mock_handle_image(self, context, image_id, any_handler):
+        self.assertEqual(image_id, 'Test-Snapshot')
+        return []
 
     def test_get_vm_ref_using_extra_config(self):
         self._create_vm()
@@ -968,8 +968,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         info = self.conn.get_info({'uuid': self.uuid,
                                    'node': self.instance_node})
         self._check_vm_info(info, power_state.RUNNING)
-        with mock.patch.object(vmware_images, 'upload_image',
-                               self.mock_upload_image):
+        with mock.patch.object(imagehandler, 'handle_image',
+                               self.mock_handle_image):
             self.conn.snapshot(self.context, self.instance, "Test-Snapshot",
                                func_call_matcher.call)
         info = self.conn.get_info({'uuid': self.uuid,

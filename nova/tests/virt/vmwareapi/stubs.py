@@ -60,7 +60,6 @@ def set_stubs(stubs):
               fake.fake_fetch_image)
     stubs.Set(vmware_images, 'get_vmdk_size_and_properties',
               fake.fake_get_vmdk_size_and_properties)
-    stubs.Set(vmware_images, 'upload_image', fake.fake_upload_image)
     stubs.Set(driver.VMwareAPISession, "_get_vim_object",
               fake_get_vim_object)
     stubs.Set(driver.VMwareAPISession, "_is_vim_object",

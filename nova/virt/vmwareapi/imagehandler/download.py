@@ -162,3 +162,57 @@ class DownloadImageHandler(base.ImageHandler):
                   {'image': image_id, 'src_path': src_path,
                    'dst_path': dst_path})
         return True
+
+    def _push_image(self, context, image_id, image_meta,
+                    path, purge_props=False,
+                    user_id=None, project_id=None,
+                    **kwargs):
+        LOG.debug(_("Uploading image %s to the Glance image server") %
+                  image_id)
+        host = kwargs.get('host')
+        if host is None:
+            LOG.error(_("Cannot push image %s with null host"), image_id)
+            return False, None, None
+        dc_path = kwargs.get('datacenter_path')
+        if dc_path is None:
+            LOG.error(_("Cannot push image %s with null datacenter path"),
+                      image_id)
+            return False, None, None
+        ds_name = kwargs.get('datastore_name')
+        if ds_name is None:
+            LOG.error(_("Cannot push image %s with null datastore name"),
+                      image_id)
+            return False, None, None
+        cookies = kwargs.get('cookies')
+        if cookies is None:
+            LOG.error(_("Cannot push image %s with null cookies"), image_id)
+            return False, None, None
+        read_file_handle = read_write_util.VMwareHTTPReadFile(
+            host, dc_path, ds_name, cookies, path)
+        file_size = read_file_handle.get_size()
+        (image_service, image_id) = glance.get_remote_image_service(
+            context, image_id)
+        metadata = image_service.show(context, image_id)
+
+        # The properties and other fields that we need to set for the image.
+        image_metadata = {"disk_format": "vmdk",
+                          "is_public": "false",
+                          "name": metadata['name'],
+                          "status": "active",
+                          "container_format": "bare",
+                          "size": file_size,
+                          "properties": {"vmware_adaptertype":
+                                         kwargs.get("adapter_type"),
+                                         "vmware_disktype":
+                                         kwargs.get("disk_type"),
+                                         "vmware_ostype":
+                                         kwargs.get("os_type"),
+                                         "vmware_image_version":
+                                         kwargs.get("image_version"),
+                                         "owner_id": project_id}}
+        vmware_images.start_transfer(context, read_file_handle, file_size,
+                                     image_service=image_service,
+                                     image_id=image_id,
+                                     image_meta=image_metadata)
+        LOG.debug(_("Uploaded image %s to the Glance image server") % image_id)
+        return True, None, image_metadata

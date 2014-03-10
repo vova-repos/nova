@@ -21,14 +21,31 @@ ex: vsphere://server_host/folder/file_path?dcPath=dc_path&dsName=ds_name
 
 import urlparse
 
+from oslo.config import cfg
+
 from nova import exception
+from nova.image import glance
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt.imagehandler import base
 from nova.virt import vmwareapi
+from nova.virt.vmwareapi import ds_util
 
 LOG = logging.getLogger(__name__)
 DS_URL_PREFIX = '/folder'
+
+
+vmware_copy_opts = [
+    cfg.StrOpt('vmware_store_image_dir',
+               default='/openstack_glance',
+               help='Datastore folder containing images when using the '
+                    'Glance VMware Datastore storage backend. This value '
+                    'should match the value of `vmware_store_image_dir` in '
+                    'glance-api.conf'),
+]
+
+CONF = cfg.CONF
+CONF.register_opts(vmware_copy_opts)
 
 
 def _parse_location_info(location_url):
@@ -78,6 +95,12 @@ def _parse_location_info(location_url):
                location_url)
         raise exception.InvalidInput(reason=msg)
     return dc_path, ds_name, file_path
+
+
+def _build_location_uri(host, datastore_folder, image_id,
+                        datacenter_path, datastore_name):
+    return 'vsphere://%s/folder%s/%s?dcPath=%s&dsName=%s' % (
+        host, datastore_folder, image_id, datacenter_path, datastore_name)
 
 
 class CopyImageHandler(base.ImageHandler):
@@ -187,9 +210,94 @@ class CopyImageHandler(base.ImageHandler):
     def _remove_image(self, context, image_id, image_meta, path,
                       user_id=None, project_id=None, location=None,
                       **kwargs):
-        raise NotImplementedError()
+        return False
 
     def _move_image(self, context, image_id, image_meta, src_path, dst_path,
                     user_id=None, project_id=None, location=None,
                     **kwargs):
-        raise NotImplementedError()
+        return False
+
+    def _push_image(self, context, image_id, image_meta,
+                    path, purge_props=False,
+                    user_id=None, project_id=None,
+                    **kwargs):
+        host = kwargs.get('host')
+        if host is None:
+            LOG.error(_("Cannot push image %s with null host"), image_id)
+            return False, None, None
+        dc_path = kwargs.get('datacenter_path')
+        if dc_path is None:
+            LOG.error(_("Cannot push image %s with null datacenter path"),
+                      image_id)
+            return False, None, None
+        ds_name = kwargs.get('datastore_name')
+        if ds_name is None:
+            LOG.error(_("Cannot push image %s with null datastore name"),
+                      image_id)
+            return False, None, None
+        session = kwargs.get('session')
+        if session is None:
+            LOG.error(_("Cannot push image %s with a null session"),
+                      image_id)
+            return False, None, None
+        service_content = session._get_vim().get_service_content()
+        datastore_folder = CONF.vmware_store_image_dir
+        if datastore_folder is None:
+            LOG.error(_("Cannot push image %s with null "
+                        "vmware_store_image_dir"), image_id)
+        if datastore_folder.endswith('/'):
+            datastore_folder = datastore_folder[:-1]
+        loc_uri = _build_location_uri(
+            host, datastore_folder, image_id, dc_path, ds_name)
+
+        # move the bits to the CONF.vmware_store_image_dir directory
+        dc_moref = session._call_method(session._get_vim(),
+                                        'FindByInventoryPath',
+                                        service_content.searchIndex,
+                                        inventoryPath=dc_path)
+        if dc_moref is None:
+            LOG.error(_("Cannot find managed object ref for "
+                        "datacenter path %s"), dc_path)
+            return False, None, None
+        dst_path = '%s/%s' % (datastore_folder, image_id)
+
+        move_task = session._call_method(
+            session._get_vim(),
+            'MoveDatastoreFile_Task',
+            service_content.fileManager,
+            sourceName=ds_util.build_datastore_path(ds_name, path),
+            sourceDatacenter=dc_moref,
+            destinationName=ds_util.build_datastore_path(ds_name, dst_path),
+            destinationDatacenter=dc_moref,
+            force=True)
+        try:
+            session._wait_for_task(move_task)
+        except Exception:
+            LOG.error(_("Failed to move file from %(src)s to %(dst)s") %
+                      {'src': path, 'dst': dst_path})
+            return False, None, None
+
+        (image_service, image_id) = glance.get_remote_image_service(
+            context, image_id)
+        metadata = image_service.show(context, image_id)
+        image_metadata = {"disk_format": "vmdk",
+                          "is_public": "false",
+                          "name": metadata['name'],
+                          "status": "active",
+                          "container_format": "bare",
+                          "location": loc_uri,
+                          "properties": {"vmware_adaptertype":
+                                         kwargs.get("adapter_type"),
+                                         "vmware_disktype":
+                                         kwargs.get("disk_type"),
+                                         "vmware_ostype":
+                                         kwargs.get("os_type"),
+                                         "vmware_image_version":
+                                         kwargs.get("image_version"),
+                                         "owner_id": project_id}}
+        try:
+            image_service.update(context, image_id, image_metadata)
+        except Exception:
+            LOG.error(_("Failed to update image %s"), image_id)
+            return False, None, None
+        return True, loc_uri, image_metadata

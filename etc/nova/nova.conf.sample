@@ -3355,6 +3355,9 @@
 # Whether to use linked clone (boolean value)
 #use_linked_clone=true
 
+# Datastore folder containing images when using the Glance
+# VMware Datastore storage backend. (string value)
+#vmware_store_image_dir=/openstack_glance
 
 #
 # Options defined in nova.virt.vmwareapi.vif

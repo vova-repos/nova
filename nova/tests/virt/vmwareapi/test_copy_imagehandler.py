@@ -60,6 +60,17 @@ class CopyImageHandlerTestCase(test.NoDBTestCase):
             dst_folder='fake_folder')
         self.assertTrue(handled)
 
+    def test_push_image(self):
+        session = mock.Mock()
+        handled = self.imagehandler._push_image(
+            self.context, self.image_meta.get('id'),
+            self.image_meta, 'vmware_temp/fake_uuid-flat.vmdk',
+            host='127.0.0.1',
+            datacenter_path='dc1',
+            datastore_name='ds1',
+            session=session)
+        self.assertTrue(handled)
+
     def test_parse_location_info(self):
         expected_dc_path = 'dc_path'
         expected_ds_name = 'ds_name'
@@ -75,13 +86,11 @@ class CopyImageHandlerTestCase(test.NoDBTestCase):
         self.assertEqual(ds_name, expected_ds_name)
 
     def test_move_image(self):
-        self.assertRaises(NotImplementedError,
-                          self.imagehandler._move_image,
-                          self.context, self.image_meta.get('id'),
-                          self.image_meta, 'source', 'dest')
+        self.assertFalse(self.imagehandler._move_image(
+            self.context, self.image_meta.get('id'),
+            self.image_meta, 'source', 'dest'))
 
     def test_remove_image(self):
-        self.assertRaises(NotImplementedError,
-                          self.imagehandler._remove_image,
-                          self.context, self.image_meta.get('id'),
-                          self.image_meta, 'path')
+        self.assertFalse(self.imagehandler._remove_image(
+            self.context, self.image_meta.get('id'),
+            self.image_meta, 'path'))

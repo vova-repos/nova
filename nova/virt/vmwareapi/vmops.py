@@ -902,29 +902,23 @@ class VMwareVMOps(object):
 
         cookies = self._session._get_vim().client.options.transport.cookiejar
 
-        def _upload_vmdk_to_image_repository():
-            # Upload the contents of -flat.vmdk file which has the disk data.
-            LOG.debug(_("Uploading image %s") % image_id,
-                      instance=instance)
-            vmware_images.upload_image(
-                context,
-                image_id,
-                instance,
-                os_type=os_type,
-                disk_type="preallocated",
-                adapter_type=adapter_type,
-                image_version=1,
-                host=self._session._host_ip,
-                data_center_name=dc_info.name,
-                datastore_name=datastore_name,
-                cookies=cookies,
-                file_path="%s/%s-flat.vmdk" % (self._tmp_folder, random_name))
-            LOG.debug(_("Uploaded image %s") % image_id,
-                      instance=instance)
-
         update_task_state(task_state=task_states.IMAGE_UPLOADING,
                           expected_state=task_states.IMAGE_PENDING_UPLOAD)
-        _upload_vmdk_to_image_repository()
+
+        file_path = '%s/%s-flat.vmdk' % (self._tmp_folder, random_name)
+        for handler, loc, image_meta in imagehandler.handle_image(
+                context, image_id, any_handler=True):
+            handler.push_image(context, image_id, None, file_path,
+                               host=self._session._host_ip,
+                               project_id=instance['project_id'],
+                               datacenter_path=dc_info.name,
+                               datastore_name=datastore_name,
+                               cookies=cookies,
+                               session=self._session,
+                               os_type=os_type,
+                               disk_type="preallocated",
+                               adapter_type=adapter_type,
+                               image_version=1)
 
         def _clean_temp_data():
             """Delete temporary vmdk files generated in image handling

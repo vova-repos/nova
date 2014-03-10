@@ -52,6 +52,17 @@ class DownloadImageHandlerTestCase(test.NoDBTestCase):
             self.image_meta, path, datastore_name=datastore_name)
         self.assertTrue(handled)
 
+    def test_push_image(self):
+        session = mock.Mock()
+        handled = self.imagehandler._push_image(
+            self.context, self.image_meta.get('id'),
+            self.image_meta, 'vmware_temp/fake_uuid-flat.vmdk',
+            host='127.0.0.1',
+            datacenter_path='dc1',
+            datastore_name='ds1',
+            session=session)
+        self.assertTrue(handled)
+
     def test_move_image(self):
         src_path = '/src_path'
         dst_path = '/dst_path'

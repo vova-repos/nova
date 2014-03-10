@@ -113,42 +113,6 @@ def upload_iso_to_datastore(iso_path, instance, **kwargs):
               instance=instance)
 
 
-def upload_image(context, image, instance, **kwargs):
-    """Upload the snapshotted vm disk file to Glance image server."""
-    LOG.debug(_("Uploading image %s to the Glance image server") % image,
-              instance=instance)
-    read_file_handle = read_write_util.VMwareHTTPReadFile(
-                                kwargs.get("host"),
-                                kwargs.get("data_center_name"),
-                                kwargs.get("datastore_name"),
-                                kwargs.get("cookies"),
-                                kwargs.get("file_path"))
-    file_size = read_file_handle.get_size()
-    (image_service, image_id) = glance.get_remote_image_service(context, image)
-    metadata = image_service.show(context, image_id)
-
-    # The properties and other fields that we need to set for the image.
-    image_metadata = {"disk_format": "vmdk",
-                      "is_public": "false",
-                      "name": metadata['name'],
-                      "status": "active",
-                      "container_format": "bare",
-                      "size": file_size,
-                      "properties": {"vmware_adaptertype":
-                                            kwargs.get("adapter_type"),
-                                     "vmware_disktype":
-                                            kwargs.get("disk_type"),
-                                     "vmware_ostype": kwargs.get("os_type"),
-                                     "vmware_image_version":
-                                            kwargs.get("image_version"),
-                                     "owner_id": instance['project_id']}}
-    start_transfer(context, read_file_handle, file_size,
-                   image_service=image_service,
-                   image_id=image_id, image_meta=image_metadata)
-    LOG.debug(_("Uploaded image %s to the Glance image server") % image,
-              instance=instance)
-
-
 def get_vmdk_size_and_properties(context, image, instance):
     """Get size of the vmdk file that is to be downloaded for attach in spawn.
     Need this to create the dummy virtual disk for the meta-data file. The
