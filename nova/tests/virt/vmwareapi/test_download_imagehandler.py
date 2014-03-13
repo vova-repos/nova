@@ -32,7 +32,8 @@ class DownloadImageHandlerTestCase(test.NoDBTestCase):
         super(DownloadImageHandlerTestCase, self).setUp()
         fake_images.stub_out_image_service(self.stubs)
         stubs.set_stubs(self.stubs)
-        self.image_meta = {'id': '70a599e0-31e7-49b7-b260-868f441e862b'}
+        self.image_meta = {'id': '70a599e0-31e7-49b7-b260-868f441e862b',
+                           'size': 74185822}
         vmwareapi_fake.reset()
         self.driver = vmware_driver.VMwareESXDriver(fake.FakeVirtAPI())
         self.imagehandler = download.DownloadImageHandler(self.driver)
@@ -47,21 +48,23 @@ class DownloadImageHandlerTestCase(test.NoDBTestCase):
     def test_fetch_image(self):
         path = '/path'
         datastore_name = 'ds1'
+        session = mock.Mock()
         handled = self.imagehandler._fetch_image(
             self.context, self.image_meta.get('id'),
-            self.image_meta, path, datastore_name=datastore_name)
+            self.image_meta, path, datastore_name=datastore_name,
+            session=session)
         self.assertTrue(handled)
 
     def test_push_image(self):
         session = mock.Mock()
-        handled = self.imagehandler._push_image(
+        result = self.imagehandler._push_image(
             self.context, self.image_meta.get('id'),
             self.image_meta, 'vmware_temp/fake_uuid-flat.vmdk',
             host='127.0.0.1',
             datacenter_path='dc1',
             datastore_name='ds1',
             session=session)
-        self.assertTrue(handled)
+        self.assertTrue(result[0])
 
     def test_move_image(self):
         src_path = '/src_path'

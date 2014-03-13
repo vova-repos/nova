@@ -215,6 +215,7 @@ class VMwareVMOps(object):
                 location=loc,
                 session=self._session,
                 dst_folder=upload_location,  # unused?
+                transfer_timeout_secs=CONF.vmware.image_transfer_timeout_secs,
                 instance_id=instance['uuid']))
 
         LOG.debug(_("Fetched image file data %(image_ref)s to "

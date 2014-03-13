@@ -15,6 +15,7 @@
 """
 Download image handler implementation for the VMware driver.
 """
+from oslo.vmware import image_transfer
 
 from nova.image import glance
 from nova.openstack.common.gettextutils import _
@@ -50,19 +51,20 @@ class DownloadImageHandler(base.ImageHandler):
         LOG.debug(_("Fetching image %s from glance image server"), image_id)
         (image_service, image_id) = glance.get_remote_image_service(context,
                                                                     image_id)
+        session = kwargs.get("session")
         file_size = int(image_meta.get('size'))
         try:
-            read_iter = image_service.download(context, image_id)
-            read_file_handle = read_write_util.GlanceFileRead(read_iter)
-            write_file_handle = read_write_util.VMwareHTTPWriteFile(
-                kwargs.get("host"),
-                kwargs.get("datacenter_name"),
-                kwargs.get("datastore_name"),
-                kwargs.get("cookies"),
-                path,
-                file_size)
-            vmware_images.start_transfer(context, read_file_handle, file_size,
-                                         write_file_handle=write_file_handle)
+            image_transfer.download_flat_image(
+                context,
+                kwargs.get("transfer_timeout_secs"),
+                image_service,
+                image_id,
+                host=session._host,
+                image_size=file_size,
+                data_center_name=kwargs.get("datacenter_name"),
+                datastore_name=kwargs.get("datastore_name"),
+                cookies=kwargs.get("cookies"),
+                file_path=path)
         except Exception as exc:
             LOG.error(_("Failed to fetch image %(image)s: %(exc)s"),
                       {'image': image_id, 'exc': exc})

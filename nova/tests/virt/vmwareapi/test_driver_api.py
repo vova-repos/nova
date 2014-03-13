@@ -72,6 +72,7 @@ CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('remove_unused_original_minimum_age_seconds',
                 'nova.virt.imagecache')
 FAKE_IMAGE_UUID = '70a599e0-31e7-49b7-b260-868f441e862b'
+FAKE_IMAGE_SIZE = 74185822
 
 
 class fake_vm_ref(object):
@@ -810,13 +811,13 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             with mock.patch.object(image_transfer, 'download_flat_image') as m:
                 self._create_vm()
                 file_path = "%s/%s/%s/%s-flat.vmdk" % (
-                    "vmware_temp", uuid, "fake_image_uuid", "fake_image_uuid")
+                    "vmware_temp", uuid, FAKE_IMAGE_UUID, FAKE_IMAGE_UUID)
                 m.assert_called_once_with(
                      self.context,
                      cfg.CONF.vmware.image_transfer_timeout_secs,
                      self.image_service,
-                     "fake_image_uuid",
-                     image_size=1024,
+                     FAKE_IMAGE_UUID,
+                     image_size=FAKE_IMAGE_SIZE,
                      data_center_name=self.dc,
                      datastore_name=self.ds,
                      host="test_url",
