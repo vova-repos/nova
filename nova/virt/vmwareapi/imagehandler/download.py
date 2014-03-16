@@ -183,14 +183,14 @@ class DownloadImageHandler(base.ImageHandler):
             LOG.error(_("Cannot push image %s with null datastore name"),
                       image_id)
             return False, None, None
+        # The properties and other fields that we need to set for the image.
+        # Note(vui): update oslo.vmware to return image_metadata instead
+        # of constructing one here.
         #cookies = kwargs.get('cookies')
         #if cookies is None:
         #    LOG.error(_("Cannot push image %s with null cookies"), image_id)
         #    return False, None, None
 
-        #read_file_handle = read_write_util.VMwareHTTPReadFile(
-        #    host, dc_path, ds_name, cookies, path)
-        #file_size = read_file_handle.get_size()
         LOG.debug(_("Uploading image %s") % image_id)
         (image_service, image_id) = glance.get_remote_image_service(
             context, image_id)
