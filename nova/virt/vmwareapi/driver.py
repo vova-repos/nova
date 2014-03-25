@@ -70,6 +70,11 @@ vmwareapi_opts = [
     cfg.BoolOpt('use_linked_clone',
                 default=True,
                 help='Whether to use linked clone'),
+    cfg.StrOpt('pbm_wsdl_location',
+               help='PBM service WSDL file location URL. '
+                    'e.g. file:///opt/SDK/spbm/wsdl/pbmService.wsdl '
+                    'Not setting this will disable storage policy based '
+                    'placement of instances.'),
     ]
 
 CONF = cfg.CONF
@@ -745,7 +750,8 @@ class VMwareAPISession(api.VMwareAPISession):
                 task_poll_interval=CONF.vmware.task_poll_interval,
                 scheme=scheme,
                 create_session=True,
-                wsdl_loc=CONF.vmware.wsdl_location
+                wsdl_loc=CONF.vmware.wsdl_location,
+                pbm_wsdl_loc=CONF.vmware.pbm_wsdl_location
                 )
 
     def _get_vim_object(self):
