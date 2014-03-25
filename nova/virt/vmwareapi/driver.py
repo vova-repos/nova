@@ -23,6 +23,7 @@ import re
 
 from oslo.config import cfg
 from oslo.vmware import api
+from oslo.vmware import pbm
 from oslo.vmware import vim
 import suds
 
@@ -70,15 +71,23 @@ vmwareapi_opts = [
     cfg.BoolOpt('use_linked_clone',
                 default=True,
                 help='Whether to use linked clone'),
+    ]
+
+spbm_opts = [
     cfg.StrOpt('pbm_wsdl_location',
                help='PBM service WSDL file location URL. '
                     'e.g. file:///opt/SDK/spbm/wsdl/pbmService.wsdl '
                     'Not setting this will disable storage policy based '
                     'placement of instances.'),
+    cfg.StrOpt('pbm_default_policy',
+               help='The PBM default policy. If pbm_wsdl_location is set and '
+                    'there is no defined storage policy for the specific '
+                    'request then this policy will be used.'),
     ]
 
 CONF = cfg.CONF
 CONF.register_opts(vmwareapi_opts, 'vmware')
+CONF.register_opts(spbm_opts, 'vmware')
 
 TIME_BETWEEN_API_CALL_RETRIES = 1.0
 
@@ -133,10 +142,20 @@ class VMwareESXDriver(driver.ComputeDriver):
                                         datastore_regex=self._datastore_regex)
         self._host = host.Host(self._session)
         self._host_state = None
+        self.validate_configuration()
+
+    def _validate_common_configuration(self):
+        """Common VMware driver configuration validation."""
 
         #TODO(hartsocks): back-off into a configuration test module.
         if CONF.vmware.use_linked_clone is None:
             raise error_util.UseLinkedCloneConfigurationFault()
+
+    def validate_configuration(self):
+        self._validate_common_configuration()
+        if CONF.vmware.pbm_wsdl_location or CONF.vmware.pbm_default_policy:
+            msg = _('Storage policies not supported on ESX Driver')
+            raise exception.Invalid(msg)
 
     @property
     def host_state(self):
@@ -407,12 +426,25 @@ class VMwareVCDriver(VMwareESXDriver):
         self._virtapi = virtapi
         self._update_resources()
 
+        # validate the configurations
+        self.validate_configuration()
+
         # The following initialization is necessary since the base class does
         # not use VC state.
         first_cluster = self._resources.keys()[0]
         self._vmops = self._resources.get(first_cluster).get('vmops')
         self._volumeops = self._resources.get(first_cluster).get('volumeops')
         self._vc_state = self._resources.get(first_cluster).get('vcstate')
+
+    def validate_configuration(self):
+        self._validate_common_configuration()
+
+        if (CONF.vmware.pbm_wsdl_location and
+                CONF.vmware.pbm_default_policy and
+                not pbm.get_profile_id_by_name(
+                            self._session,
+                            CONF.vmware.pbm_default_policy)):
+                    raise error_util.PbmDefaultPolicyDoesNotExist()
 
     def migrate_disk_and_power_off(self, context, instance, dest,
                                    flavor, network_info,

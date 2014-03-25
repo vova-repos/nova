@@ -40,6 +40,10 @@ class UseLinkedCloneConfigurationFault(VMwareDriverConfigurationException):
     msg_fmt = _("No default value for use_linked_clone found.")
 
 
+class PbmDefaultPolicyDoesNotExist(VMwareDriverConfigurationException):
+    msg_fmt = _("Default PBM policy is not defined.")
+
+
 class FaultCheckers(object):
     """Methods for fault checking of SOAP response. Per Method error handlers
     for which we desire error checking are defined. SOAP faults are

@@ -31,6 +31,7 @@ from oslo.config import cfg
 from oslo.vmware import api
 from oslo.vmware import exceptions as vexc
 from oslo.vmware import image_transfer
+from oslo.vmware import pbm
 from oslo.vmware import vim
 import suds
 
@@ -57,6 +58,7 @@ from nova.virt import driver as v_driver
 from nova.virt import fake
 from nova.virt import imagehandler
 from nova.virt.vmwareapi import driver
+from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import fake as vmwareapi_fake
 from nova.virt.vmwareapi import imagecache
 from nova.virt.vmwareapi import vim_util
@@ -283,6 +285,16 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
     def test_driver_capabilities(self):
         self.assertTrue(self.conn.capabilities['has_imagecache'])
         self.assertFalse(self.conn.capabilities['supports_recreate'])
+
+    def test_configuration_linked_clone(self):
+        self.flags(use_linked_clone=None, group='vmware')
+        self.assertRaises(error_util.UseLinkedCloneConfigurationFault,
+                          self.conn.validate_configuration)
+
+    def test_configuration_pbm_no_default(self):
+        self.flags(pbm_wsdl_location='fake-location', group='vmware')
+        self.assertRaises(exception.Invalid,
+                          self.conn.validate_configuration)
 
     def test_login_retries(self):
         self.attempts = 0
@@ -1857,6 +1869,17 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase):
         for node in self.conn._resources.keys():
             self.assertEqual(self.conn._datastore_regex,
                     self.conn._resources[node]['vmops']._datastore_regex)
+
+    def test_configuration_pbm_no_default(self):
+        self.flags(pbm_wsdl_location='fake-location', group='vmware')
+        self.conn.validate_configuration()
+
+    @mock.patch.object(pbm, 'get_profile_id_by_name', return_value=None)
+    def test_configuration_pbm_bad_default(self, _get_profile_id_by_name):
+        self.flags(pbm_wsdl_location='fake-location',
+                   pbm_default_policy='fake-policy', group='vmware')
+        self.assertRaises(error_util.PbmDefaultPolicyDoesNotExist,
+                          self.conn.validate_configuration)
 
     def test_get_available_resource(self):
         stats = self.conn.get_available_resource(self.node_name)
