@@ -166,7 +166,7 @@ class CopyImageHandler(base.ImageHandler):
                                       'ds_name': src_ds_name,
                                       'file': src_file_path})
             return
-        service_content = session._get_vim().retrieve_service_content()
+        service_content = session._get_vim().service_content
         search_index_moref = service_content.searchIndex
         src_moref = session._call_method(session._get_vim(),
                                          'FindByInventoryPath',
@@ -240,7 +240,7 @@ class CopyImageHandler(base.ImageHandler):
             LOG.error(_("Cannot push image %s with a null session"),
                       image_id)
             return False, None, None
-        service_content = session._get_vim().get_service_content()
+        service_content = session._get_vim().service_content
         datastore_folder = CONF.vmware_store_image_dir
         if datastore_folder is None:
             LOG.error(_("Cannot push image %s with null "

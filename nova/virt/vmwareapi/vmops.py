@@ -203,7 +203,7 @@ class VMwareVMOps(object):
             image_meta, upload_location, cookies,
             disk_type, image_size_kb, container_format,
             data_store_name, data_center_name,
-            res_pool_ref, vm_folder_ref):
+            res_pool_ref, vm_folder_ref, upload_path=None):
         """Fetch image from Glance to datastore."""
         LOG.debug(_("Fetching image file data %(image_ref)s to the "
                     "data store %(data_store_name)s") %
@@ -288,6 +288,7 @@ class VMwareVMOps(object):
                     datacenter_name=data_center_name,
                     datastore_name=data_store_name,
                     cookies=cookies,
+                    dst_folder=upload_path,
                     location=loc,
                     session=self._session,
                     transfer_timeout_secs=transfer_timeout_secs,
@@ -649,7 +650,7 @@ class VMwareVMOps(object):
                         image_meta, upload_location, cookies,
                         disk_type, vmdk_file_size_in_kb,
                         container_format, data_store_name, dc_info.name,
-                        res_pool_ref, vm_folder_ref)
+                        res_pool_ref, vm_folder_ref, upload_path)
 
                 if found_adapter_type and found_adapter_type != adapter_type:
                     # TODO(vui): Consider override with found_adapter_type,
