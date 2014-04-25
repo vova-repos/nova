@@ -22,6 +22,7 @@ from nova import exception
 from nova.openstack.common import lockutils
 from nova import test
 from nova.tests.image import fake as fake_image
+from nova.virt import fake
 from nova.virt import imagehandler
 from nova.virt.imagehandler import download as download_imagehandler
 
@@ -84,6 +85,30 @@ class ImageHandlerTestCase(test.TestCase):
         self.assertEqual(1, len(imagehandler._IMAGE_HANDLERS_ASSO))
         imagehandler._image_handler_disasso(handler, path)
         self.assertEqual(0, len(imagehandler._IMAGE_HANDLERS_ASSO))
+
+    def test_get_enabled_image_handlers(self):
+        def _verify_enalbed_handlers(driver, expected_handlers):
+            enabled_handlers = imagehandler._get_enabled_image_handlers(driver)
+            self.assertEqual(enabled_handlers, expected_handlers)
+
+        default_handlers = ['handler1', 'handler2']
+        libvirt_handlers = ['handler3', 'handler4']
+        vmware_handlers = ['handler5', 'handler6']
+        self.flags(image_handlers=default_handlers)
+        self.flags(image_handlers=libvirt_handlers, group='libvirt')
+        self.flags(image_handlers=vmware_handlers, group='vmware')
+
+        _verify_enalbed_handlers(None, default_handlers)
+        driver = fake.FakeDriver(None)
+        _verify_enalbed_handlers(driver, default_handlers)
+        driver.__module__ = 'nova.virt.libvirt.driver.LibvirtDriver'
+        _verify_enalbed_handlers(driver, libvirt_handlers + default_handlers)
+        driver.__module__ = 'nova.virt.vmwareapi.driver.VMwareESXDriver'
+        _verify_enalbed_handlers(driver, vmware_handlers + default_handlers)
+        driver.__module__ = 'nova.virt.vmwareapi.VMwareVCDriver'
+        _verify_enalbed_handlers(driver, vmware_handlers + default_handlers)
+        driver.__module__ = 'fake.x.y.z.foo'
+        _verify_enalbed_handlers(driver, default_handlers)
 
     def test_load_image_handlers(self):
         self.flags(image_handlers=['download'])

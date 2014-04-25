@@ -23,23 +23,43 @@ from oslo.config import cfg
 import stevedore
 
 from nova import exception
+from nova.hacking import checks
 from nova.image import glance
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
-image_opts = [
+_opt_help = ('Specifies which image handler extension names to use '
+              'for handling images by %s. The first extension in the '
+              'list which can handle the image with a suitable '
+              'location will be used.')
+
+_comm_opts = [
     cfg.ListOpt('image_handlers',
-                default=['vmware_download', 'download'],
-                help='Specifies which image handler extension names to use '
-                     'for handling images. The first extension in the list '
-                     'which can handle the image with a suitable location '
-                     'will be used.'),
+                default=['download'],
+                help=(_opt_help % "all hypervisors" +
+                      ' As the common handlers these extensions will '
+                      'be only used when all hypervisor special handlers '
+                      'are not suitable.')),
+]
+
+_libvirt_opts = [
+    cfg.ListOpt('image_handlers',
+                default=[],
+                help=_opt_help % "libvirt hypervisor"),
+]
+
+_vmware_opts = [
+    cfg.ListOpt('image_handlers',
+                default=['vmware_copy', 'vmware_download'],
+                help=_opt_help % "vmware hypervisor"),
 ]
 
 CONF = cfg.CONF
-CONF.register_opts(image_opts)
+CONF.register_opts(_comm_opts)
+CONF.register_opts(_libvirt_opts, 'libvirt')
+CONF.register_opts(_vmware_opts, 'vmware')
 
 _IMAGE_HANDLERS = []
 _IMAGE_HANDLERS_ASSO = {}
@@ -67,6 +87,24 @@ def _match_locations(locations, schemes):
     return matched
 
 
+def _get_enabled_image_handlers(driver):
+    ret = list(CONF.image_handlers)
+    if driver:
+        data = './' + driver.__module__.replace('.', '/')
+        name = checks._get_virt_name(checks.virt_file_re, data)
+        if name:
+            if name == 'vmwareapi':
+                name = 'vmware'
+            elif name == 'xenapi':
+                name = 'xenserver'
+            group = getattr(CONF, name, None)
+            if group:
+                handlers = getattr(group, 'image_handlers', [])
+                if handlers:
+                    ret = handlers + ret
+    return ret
+
+
 def load_image_handlers(driver):
     """Loading construct user configured image handlers.
 
@@ -86,7 +124,7 @@ def load_image_handlers(driver):
     # for de-duplicate. using ordereddict lib to support both py26 and py27?
     processed_handler_names = []
     ex = stevedore.extension.ExtensionManager('nova.virt.image.handlers')
-    for name in CONF.image_handlers:
+    for name in _get_enabled_image_handlers(driver):
         if not name:
             continue
         name = name.strip()
