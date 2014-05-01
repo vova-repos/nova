@@ -586,7 +586,7 @@ class VMwareVMOps(object):
             if not (self._check_if_folder_file_exists(
                         ds_browser, data_store_ref, data_store_name,
                         image_folder_in_cache, cached_image_name)):
-
+                upload_path = None
                 if disk_type == 'streamOptimized':
                     tmp_upload_folder = "%s_%s" % (IMAGE_VM_PREFIX,
                                                    uuidutils.generate_uuid())
